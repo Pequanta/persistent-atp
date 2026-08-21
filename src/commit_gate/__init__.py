@@ -21,6 +21,7 @@ from .ops import (
 from .proposal import Proposal
 from .reasons import Reason, Rejection
 from .state import EdgeRecord, MemoryView, NodeRecord, ReadView
+from .store import ConcurrencyError, HashChainError, JournalStore
 from .transitions import IMMUTABLE_FIELDS, STATUS_TRANSITIONS
 from .validate import validate_proposal
 from .vocab import (
@@ -68,7 +69,12 @@ __all__ = [
     "NodeRecord",
     "EdgeRecord",
     "MemoryView",
-    
+
+    # Journal
+    "JournalStore",
+    "ConcurrencyError",
+    "HashChainError",
+
     # Rules & Schema
     "STATUS_TRANSITIONS",
     "IMMUTABLE_FIELDS",

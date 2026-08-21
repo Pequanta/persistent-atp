@@ -52,6 +52,16 @@ class Reason(StrEnum):
     PROMOTION_WITHOUT_ALIGNMENT = "promotion-without-alignment"
     ENVIRONMENT_DRIFT = "environment-drift"
 
+    # Lost races. The proposal was well formed; the journal moved under it.
+    STALE_BASE_REVISION = "stale-base-revision"
+    LEASE_NOT_HELD = "lease-not-held"
+    FENCING_TOKEN_SUPERSEDED = "fencing-token-superseded"
+    JOURNAL_BUSY = "journal-busy"
+
+    # Missing concurrency control. A proposal that names no base revision
+    # cannot be checked against the journal at all, so it is never committed.
+    MISSING_CONCURRENCY_TOKEN = "missing-concurrency-token"
+
 
 @dataclass(frozen=True, slots=True)
 class Rejection:

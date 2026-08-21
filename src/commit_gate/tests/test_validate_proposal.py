@@ -8,6 +8,7 @@ executor failures not passing as zero-goal successes.
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from commit_gate.ops import AddEdge, RemoveEdge, SetField, UpsertNode
 from commit_gate.proposal import Proposal
@@ -265,6 +266,58 @@ class Namespacing(unittest.TestCase):
     def test_foreign_edge_target_is_rejected(self):
         proposal = propose(AddEdge("HAS_TACTIC", "p17/fs1", "p22/ta1", "p17/e1"))
         self.assertIn(Reason.NAMESPACE_MISMATCH, reasons_of(proposal))
+
+
+class ConcurrencyTokens(unittest.TestCase):
+    """Concurrency control is mandatory, not something a proposer may omit."""
+
+    @staticmethod
+    def _status_op() -> SetField:
+        return SetField(
+            "FormalState",
+            "p17/fs1",
+            "status",
+            FormalStateStatus.EXPANDED,
+            prior=FormalStateStatus.OPEN,
+        )
+
+    def test_omitting_the_base_revision_is_rejected(self):
+        proposal = replace(propose(state("p17/fs2")), base_revision=None)
+        self.assertEqual(reasons_of(proposal), [Reason.MISSING_CONCURRENCY_TOKEN])
+
+    def test_a_structural_op_needs_no_lease(self):
+        proposal = replace(
+            propose(state("p17/fs2")), lease_id=None, fencing_token=None
+        )
+        self.assertEqual(reasons_of(proposal), [])
+
+    def test_a_status_op_without_the_lease_is_rejected(self):
+        proposal = replace(
+            propose(self._status_op()), lease_id=None, fencing_token=None
+        )
+        self.assertIn(Reason.MISSING_CONCURRENCY_TOKEN, reasons_of(proposal))
+
+    def test_half_a_lease_is_still_rejected(self):
+        proposal = replace(propose(self._status_op()), fencing_token=None)
+        self.assertIn(Reason.MISSING_CONCURRENCY_TOKEN, reasons_of(proposal))
+
+    def test_a_status_op_with_the_lease_passes(self):
+        self.assertNotIn(
+            Reason.MISSING_CONCURRENCY_TOKEN, reasons_of(propose(self._status_op()))
+        )
+
+    def test_the_missing_lease_names_the_op_that_needed_it(self):
+        proposal = replace(
+            propose(state("p17/fs2"), self._status_op()),
+            lease_id=None,
+            fencing_token=None,
+        )
+        findings = [
+            f
+            for f in validate_proposal(proposal)
+            if f.reason is Reason.MISSING_CONCURRENCY_TOKEN
+        ]
+        self.assertEqual([f.op_index for f in findings], [1])
 
 
 class Findings(unittest.TestCase):

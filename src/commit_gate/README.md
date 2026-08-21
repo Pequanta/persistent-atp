@@ -33,10 +33,10 @@ The `commit_gate` module contains the following files:
 ### Validation Logic
 - **`proposal.py`**: Data structure representing a worker's requested changes.
 - **`reasons.py`**: Closed vocabulary of rejection reason codes returned when a proposal is invalid.
-- **`validate.py`**: The core rules engine. Contains functions to verify subgoals, confirm executor results, check valid edge endpoints, enforce status transitions, and enforce `compare-and-set` field updates.
+- **`validate.py`**: The core rules engine. Contains functions to verify subgoals, confirm executor results, check valid edge endpoints, enforce status transitions, and enforce `compare-and-set` field updates. `check_concurrency_tokens` runs first and unconditionally: a proposal naming no `base_revision`, or changing a status without holding the lease, is rejected rather than committed unchecked.
 
 ### State and Orchestration
 - **`state.py`**: Defines the `ReadView` protocol required to read from the database, along with an in-memory implementation (`MemoryView`) used for testing.
 - **`apply.py`**: An engine that idempotently projects a sequence of operations onto a `MemoryView`. Used for local testing and replay.
-- **`store.py`**: An append-only SQLite journal store that handles fencing tokens and hash-chaining verification.
-- **`gate.py`**: The `CommitGate` orchestrator. It receives proposals, runs all validators via `validate.py`, and if accepted, calculates the cryptographic chain hashes.
+- **`store.py`**: An append-only SQLite journal. Every mutation runs in one `BEGIN IMMEDIATE` transaction, so the head read, the base-revision check, the lease-fencing check, and the insert cannot interleave with another writer. A writer that cannot take the lock within `busy_timeout_ms` gets a `journal-busy` rejection rather than a raw SQLite error. `verify_chain(proof_id)` recomputes every hash in a proof's history and raises `HashChainError` on the first row that does not chain; `append` runs the same check on the head alone, so a corrupt hash never gets a valid link built on top of it. Only the gate may call its mutating methods.
+- **`gate.py`**: The `CommitGate` orchestrator, and the system's **sole writer**. It receives proposals, runs all validators via `validate.py`, and if accepted, chains and appends the event to the journal itself. A lost race (stale base revision, superseded fencing token) comes back as a `Rejection`, not an exception.

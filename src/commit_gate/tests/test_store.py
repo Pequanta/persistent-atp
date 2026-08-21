@@ -1,55 +1,181 @@
+import os
+import tempfile
 import unittest
 
-from commit_gate.canon import GENESIS_HASH
-from commit_gate.gate import CommitResult
-from commit_gate.store import ConcurrencyError, JournalStore
+from commit_gate.canon import GENESIS_HASH, canonical_json
+from commit_gate.reasons import Reason
+from commit_gate.store import ConcurrencyError, HashChainError, JournalStore
+
+
+def payload(**overrides):
+    """A minimal well-formed event payload, as `Proposal.to_dict` produces."""
+    base = {"proof_id": "p1", "actor": "test", "worker_class": "test"}
+    base.update(overrides)
+    return base
+
 
 class TestJournalStore(unittest.TestCase):
     def test_head_on_empty_journal(self):
         store = JournalStore()
-        rev, h = store.head("p1")
-        self.assertEqual(rev, 0)
-        self.assertEqual(h, GENESIS_HASH)
+        self.assertEqual(store.head("p1"), (0, GENESIS_HASH))
 
     def test_append_and_read(self):
         store = JournalStore()
-        
-        result = CommitResult(accepted=True, rejections=(), event_hash="hash1", revision=1)
-        payload = {"actor": "test", "worker_class": "test"}
-        
-        store.append("p1", payload, result)
-        
-        rev, h = store.head("p1")
-        self.assertEqual(rev, 1)
-        self.assertEqual(h, "hash1")
-        
+        revision, event_hash = store.append(payload())
+
+        self.assertEqual(revision, 1)
+        self.assertEqual(store.head("p1"), (1, event_hash))
+
         events = store.read_events("p1")
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["actor"], "test")
 
+    def test_append_chains_onto_the_head(self):
+        store = JournalStore()
+        _, first = store.append(payload())
+        _, second = store.append(payload())
+
+        self.assertEqual(
+            store.read_chain("p1"),
+            [(1, first, GENESIS_HASH), (2, second, first)],
+        )
+
+    def test_revisions_are_numbered_per_proof(self):
+        store = JournalStore()
+        store.append(payload(proof_id="p1"))
+        revision, _ = store.append(payload(proof_id="p2"))
+        self.assertEqual(revision, 1)
+
     def test_base_revision_mismatch(self):
         store = JournalStore()
-        result = CommitResult(accepted=True, rejections=(), event_hash="hash1", revision=1)
-        payload = {"actor": "test", "worker_class": "test", "base_revision": 99}
-        
+        with self.assertRaises(ConcurrencyError) as caught:
+            store.append(payload(base_revision=99))
+        self.assertEqual(caught.exception.reason, Reason.STALE_BASE_REVISION)
+
+    def test_failed_append_leaves_the_journal_untouched(self):
+        store = JournalStore()
+        _, first = store.append(payload())
+
         with self.assertRaises(ConcurrencyError):
-            store.append("p1", payload, result)
+            store.append(payload(base_revision=99))
+
+        self.assertEqual(store.head("p1"), (1, first))
+        self.assertEqual(len(store.read_events("p1")), 1)
 
     def test_lease_fencing(self):
         store = JournalStore()
         token = store.acquire_lease("p1", "lease1")
-        
-        result = CommitResult(accepted=True, rejections=(), event_hash="hash1", revision=1)
-        
-        # Correct token and lease
-        payload = {"actor": "test", "worker_class": "test", "lease_id": "lease1", "fencing_token": token}
-        store.append("p1", payload, result)
-        
-        # Wrong token
-        payload2 = {"actor": "test", "worker_class": "test", "lease_id": "lease1", "fencing_token": 0}
-        result2 = CommitResult(accepted=True, rejections=(), event_hash="hash2", revision=2)
-        with self.assertRaises(ConcurrencyError):
-            store.append("p1", payload2, result2)
+
+        store.append(payload(lease_id="lease1", fencing_token=token))
+
+        with self.assertRaises(ConcurrencyError) as caught:
+            store.append(payload(lease_id="lease1", fencing_token=0))
+        self.assertEqual(caught.exception.reason, Reason.FENCING_TOKEN_SUPERSEDED)
+
+    def test_reacquiring_the_lease_locks_out_the_old_holder(self):
+        store = JournalStore()
+        old = store.acquire_lease("p1", "lease1")
+        new = store.acquire_lease("p1", "lease2")
+        self.assertGreater(new, old)
+
+        with self.assertRaises(ConcurrencyError) as caught:
+            store.append(payload(lease_id="lease1", fencing_token=old))
+        self.assertEqual(caught.exception.reason, Reason.LEASE_NOT_HELD)
+
+    def test_lease_claimed_but_never_acquired(self):
+        store = JournalStore()
+        with self.assertRaises(ConcurrencyError) as caught:
+            store.append(payload(lease_id="lease1", fencing_token=1))
+        self.assertEqual(caught.exception.reason, Reason.LEASE_NOT_HELD)
+
+
+class TestHashChain(unittest.TestCase):
+    """`verify_chain` recomputes what the journal claims about itself."""
+
+    @staticmethod
+    def _tamper(store: JournalStore, revision: int, column: str, value: str) -> None:
+        """Edit a committed row behind the store's back, as corruption would."""
+        store._conn.execute(
+            f"UPDATE journal SET {column} = ? WHERE proof_id = 'p1' AND revision = ?",
+            (value, revision),
+        )
+
+    def test_empty_journal_verifies(self):
+        self.assertEqual(JournalStore().verify_chain("p1"), 0)
+
+    def test_intact_journal_verifies(self):
+        store = JournalStore()
+        store.append(payload())
+        store.append(payload())
+        self.assertEqual(store.verify_chain("p1"), 2)
+
+    def test_edited_payload_is_caught(self):
+        store = JournalStore()
+        store.append(payload())
+        store.append(payload())
+        self._tamper(
+            store, 1, "payload", canonical_json(payload(actor="attacker")).decode("utf-8")
+        )
+
+        with self.assertRaisesRegex(HashChainError, "chains to"):
+            store.verify_chain("p1")
+
+    def test_broken_link_is_caught(self):
+        store = JournalStore()
+        store.append(payload())
+        store.append(payload())
+        self._tamper(store, 2, "prev_hash", GENESIS_HASH)
+
+        with self.assertRaisesRegex(HashChainError, "follows"):
+            store.verify_chain("p1")
+
+    def test_append_refuses_to_chain_onto_a_corrupt_head(self):
+        """A bad hash must not get a good link built on top of it."""
+        store = JournalStore()
+        store.append(payload())
+        self._tamper(
+            store, 1, "payload", canonical_json(payload(actor="attacker")).decode("utf-8")
+        )
+
+        with self.assertRaises(HashChainError):
+            store.append(payload())
+
+        self.assertEqual(len(store.read_events("p1")), 1)
+
+
+class TestConcurrentWriters(unittest.TestCase):
+    """Two `JournalStore` connections on one database file."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = os.path.join(self._dir.name, "journal.db")
+
+    def test_second_writer_at_the_same_base_revision_loses(self):
+        first, second = JournalStore(self.path), JournalStore(self.path)
+
+        first.append(payload(base_revision=0))
+        with self.assertRaises(ConcurrencyError) as caught:
+            second.append(payload(base_revision=0))
+
+        self.assertEqual(caught.exception.reason, Reason.STALE_BASE_REVISION)
+        self.assertEqual(second.head("p1")[0], 1)
+        self.assertEqual(second.verify_chain("p1"), 1)
+
+    def test_a_held_write_lock_is_reported_not_raised_raw(self):
+        holder = JournalStore(self.path)
+        waiter = JournalStore(self.path, busy_timeout_ms=1)
+
+        holder._conn.execute("BEGIN IMMEDIATE")
+        try:
+            with self.assertRaises(ConcurrencyError) as caught:
+                waiter.append(payload(base_revision=0))
+        finally:
+            holder._conn.execute("ROLLBACK")
+
+        self.assertEqual(caught.exception.reason, Reason.JOURNAL_BUSY)
+        self.assertEqual(waiter.head("p1"), (0, GENESIS_HASH))
+
 
 if __name__ == "__main__":
     unittest.main()

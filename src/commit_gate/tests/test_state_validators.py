@@ -7,11 +7,16 @@ from commit_gate.state import MemoryView
 from commit_gate.validate import validate_proposal
 
 def propose(*ops) -> Proposal:
+    # Concurrency tokens are mandatory (`check_concurrency_tokens`); these
+    # tests are about the state validators, so every proposal carries them.
     return Proposal(
         proof_id="p1",
         actor="user",
         worker_class="human",
-        ops=tuple(ops)
+        ops=tuple(ops),
+        base_revision=0,
+        lease_id="lease-1",
+        fencing_token=1,
     )
 
 class TestStateValidators(unittest.TestCase):

@@ -1,8 +1,8 @@
-"""The commit gate orchestrator.
+"""The commit gate.
 
-The gate validates a proposal against a view of committed state, and if accepted,
-returns a chained hash. The caller is responsible for appending the ops to the
-journal and projecting them into the graph database.
+The gate is the only writer of committed state. A worker submits an inert
+`Proposal`; the gate validates it against committed state and, if it holds,
+appends it to the journal itself. Nothing else may write to the journal.
 """
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .canon import chain_hash, content_hash
 from .proposal import Proposal
 from .reasons import Rejection
 from .state import ReadView
+from .store import ConcurrencyError, JournalStore
 from .validate import validate_proposal
 
 __all__ = ["CommitResult", "CommitGate"]
@@ -41,19 +41,27 @@ class CommitResult:
 
 
 class CommitGate:
-    """Orchestrates proposal validation and cryptographic chaining."""
+    """Validates proposals and journals the ones that hold.
 
-    def __init__(self, view: ReadView, head_hash: str, head_revision: int):
+    `view` answers questions about committed state; `store` is the journal.
+    The gate holds no snapshot of the head — the append reads it under the
+    write lock, so there is nothing here that can go stale.
+    """
+
+    def __init__(self, view: ReadView, store: JournalStore):
         self._view = view
-        self._head_hash = head_hash
-        self._head_revision = head_revision
+        self._store = store
 
     def validate(self, proposal: Proposal) -> list[Rejection]:
-        """Run all validators against the current view."""
+        """Every rule violation in `proposal`, or an empty list."""
         return validate_proposal(proposal, self._view)
 
     def commit(self, proposal: Proposal) -> CommitResult:
-        """Validate, and if accepted, compute the cryptographic chain."""
+        """Validate `proposal` and, if it holds, append it to the journal.
+
+        A lost race is reported as a rejection rather than raised: the proposer
+        gets a code it can act on, and nothing has been written.
+        """
         rejections = self.validate(proposal)
         if rejections:
             return CommitResult(
@@ -63,14 +71,19 @@ class CommitGate:
                 revision=None,
             )
 
-        # Build the event payload exactly as it will be journaled
-        body = proposal.to_dict()
-        event_hash = chain_hash(self._head_hash, body)
-        next_revision = self._head_revision + 1
-        
+        try:
+            revision, event_hash = self._store.append(proposal.to_dict())
+        except ConcurrencyError as exc:
+            return CommitResult(
+                accepted=False,
+                rejections=(Rejection(exc.reason, exc.detail),),
+                event_hash=None,
+                revision=None,
+            )
+
         return CommitResult(
             accepted=True,
             rejections=(),
             event_hash=event_hash,
-            revision=next_revision,
+            revision=revision,
         )
