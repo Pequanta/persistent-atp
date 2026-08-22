@@ -9,9 +9,15 @@ from neo4j import GraphDatabase
 load_dotenv()
 
 from .constants import (
+    ATTEMPT_PENDING,
     ATTEMPT_STATUSES,
+    CLAIM_CONJECTURAL,
     CLAIM_STATUSES,
+    MOVE_QUEUED,
     MOVE_STATUSES,
+    STATE_KIND_AND,
+    STATE_KINDS,
+    STATE_OPEN,
     STATE_STATUSES,
     _check,
     _edge_id,
@@ -81,23 +87,23 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         assumptions: str = "",
         event_id: str = "",
     ) -> None:
-        _check(kind, {"or", "goal", "and"}, "state kind")
+        kind = _check(kind, STATE_KINDS, "state kind")
         with self._driver.session() as s:
             s.run(
                 "MERGE (st:State {proof_id: $pid, id: $id}) "
-                "ON CREATE SET st.description = $desc, st.status = 'open', "
+                "ON CREATE SET st.description = $desc, st.status = $open, "
                 "              st.kind = $kind, st.assumptions = $ass, "
                 "              st.created_in_event = $evt "
                 "ON MATCH SET st.description = $desc, st.kind = $kind",
-                pid=proof_id, id=state_id, desc=description,
+                pid=proof_id, id=state_id, desc=description, open=STATE_OPEN,
                 kind=kind, ass=assumptions, evt=event_id,
             )
             s.run(
                 "MATCH (p:Proof {proof_id: $pid, id: $pid}), (st:State {proof_id: $pid, id: $id}) "
                 "MERGE (p)-[r:HAS_STATE {edge_id: $eid}]->(st) "
-                "ON CREATE SET st.description = $desc, st.status = 'open', st.created_in_event = $evt "
+                "ON CREATE SET st.description = $desc, st.status = $open, st.created_in_event = $evt "
                 "SET r.event_id = $evt",
-                pid=proof_id, id=state_id, desc=description,
+                pid=proof_id, id=state_id, desc=description, open=STATE_OPEN,
                 eid=_edge_id(event_id, "HAS_STATE"), evt=event_id,
             )
             if parent_id:
@@ -105,9 +111,9 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
                 "MATCH (child:State {proof_id: $pid, id: $cid}), "
                 "(parent:State {proof_id: $pid, id: $pid2}) "
                 "MERGE (child)-[r:CHILD_OF {edge_id: $eid}]->(parent) "
-                "ON CREATE SET child.status = 'open', child.created_in_event = $evt "
+                "ON CREATE SET child.status = $open, child.created_in_event = $evt "
                 "SET r.event_id = $evt",
-                    pid=proof_id, cid=state_id, pid2=parent_id,
+                    pid=proof_id, cid=state_id, pid2=parent_id, open=STATE_OPEN,
                     eid=_edge_id(event_id, "CHILD_OF"), evt=event_id,
                 )
 
@@ -130,7 +136,7 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         reason: str = "",
         event_id: str = "",
     ) -> None:
-        _check(status, STATE_STATUSES, "state status")
+        status = _check(status, STATE_STATUSES, "state status")
         with self._driver.session() as s:
             s.run(
                 "MATCH (st:State {proof_id: $pid, id: $id}) "
@@ -148,11 +154,11 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         proof_id: str,
         claim_id: str,
         statement: str,
-        status: str = "conjectural",
+        status: str = CLAIM_CONJECTURAL,
         statement_blob: str = "",
         event_id: str = "",
     ) -> None:
-        _check(status, CLAIM_STATUSES, "claim status")
+        status = _check(status, CLAIM_STATUSES, "claim status")
         with self._driver.session() as s:
             s.run(
                 "MERGE (c:Claim {proof_id: $pid, id: $id}) "
@@ -179,7 +185,7 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         event_id: str = "",
         reason: str = "",
     ) -> None:
-        _check(status, CLAIM_STATUSES, "claim status")
+        status = _check(status, CLAIM_STATUSES, "claim status")
         with self._driver.session() as s:
             s.run(
                 "MATCH (c:Claim {id: $id}) "
@@ -257,9 +263,9 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         event_id: str = "",
         score: Optional[Dict[str, Any]] = None,
         cost_estimate: Optional[str] = None,
-        status: str = "queued",
+        status: str = MOVE_QUEUED,
     ) -> None:
-        _check(status, MOVE_STATUSES, "move status")
+        status = _check(status, MOVE_STATUSES, "move status")
         with self._driver.session() as s:
             s.run(
                 "MERGE (m:Move {proof_id: $pid, id: $id}) "
@@ -292,24 +298,25 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         with self._driver.session() as s:
             s.run(
                 "MERGE (st:State {proof_id: $pid, id: $id}) "
-                "ON CREATE SET st.description = $desc, st.status = 'open', "
-                "              st.kind = 'and', st.created_in_event = $evt",
-                pid=proof_id, id=subgoal_id, desc=description, evt=event_id,
+                "ON CREATE SET st.description = $desc, st.status = $open, "
+                "              st.kind = $kind, st.created_in_event = $evt",
+                pid=proof_id, id=subgoal_id, desc=description, open=STATE_OPEN,
+                kind=STATE_KIND_AND, evt=event_id,
             )
             s.run(
                 "MATCH (p:Proof {proof_id: $pid, id: $pid}), (st:State {proof_id: $pid, id: $id}) "
                 "MERGE (p)-[r:HAS_STATE {edge_id: $eid}]->(st) "
-                "ON CREATE SET st.description = $desc, st.status = 'open', st.created_in_event = $evt "
+                "ON CREATE SET st.description = $desc, st.status = $open, st.created_in_event = $evt "
                 "SET r.event_id = $evt",
-                pid=proof_id, id=subgoal_id, desc=description,
+                pid=proof_id, id=subgoal_id, desc=description, open=STATE_OPEN,
                 eid=_edge_id(event_id, "HAS_STATE"), evt=event_id,
             )
             s.run(
                 "MATCH (m:Move {proof_id: $pid, id: $mid}), (st:State {proof_id: $pid, id: $sid}) "
                 "MERGE (m)-[r:REQUIRES {edge_id: $eid}]->(st) "
-                "ON CREATE SET st.status = 'open', st.created_in_event = $evt "
+                "ON CREATE SET st.status = $open, st.created_in_event = $evt "
                 "SET r.event_id = $evt",
-                pid=proof_id, mid=move_id, sid=subgoal_id,
+                pid=proof_id, mid=move_id, sid=subgoal_id, open=STATE_OPEN,
                 eid=_edge_id(event_id, "REQUIRES"), evt=event_id,
             )
             if parent_state_id:
@@ -329,7 +336,7 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         proof_id: str = "",
         event_id: str = "",
     ) -> None:
-        _check(status, MOVE_STATUSES, "move status")
+        status = _check(status, MOVE_STATUSES, "move status")
         with self._driver.session() as s:
             s.run(
                 "MATCH (m:Move {id: $id}) "
@@ -381,11 +388,11 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
             s.run(
                 "MERGE (a:Attempt {proof_id: $pid, id: $id}) "
                 "ON CREATE SET a.move_summary = $sum, a.worker = $worker, "
-                "              a.note = $note, a.status = 'pending', "
+                "              a.note = $note, a.status = $pending, "
                 "              a.model_persona = $persona, a.disposition = $disp, "
                 "              a.result_relation = $rel, a.created_in_event = $evt "
                 "ON MATCH SET a.move_summary = $sum, a.worker = $worker, a.note = $note",
-                pid=proof_id, id=attempt_id, sum=move_summary, worker=worker,
+                pid=proof_id, id=attempt_id, sum=move_summary, worker=worker, pending=ATTEMPT_PENDING,
                 note=note, persona=model_persona, disp=disposition,
                 rel=result_relation, evt=event_id,
             )
@@ -421,7 +428,7 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
         proof_id: str = "",
         event_id: str = "",
     ) -> None:
-        _check(status, ATTEMPT_STATUSES, "attempt status")
+        status = _check(status, ATTEMPT_STATUSES, "attempt status")
         with self._driver.session() as s:
             s.run(
                 "MATCH (a:Attempt {id: $id}) "

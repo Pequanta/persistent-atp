@@ -7,7 +7,7 @@ name = "persistent-atp"
 version = "0.1.0"
 description = "A durable, race-safe metagraph memory system for long-horizon automated theorem proving"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "python-dotenv>=1.0",
 ]
@@ -25,4 +25,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-testpaths = ["src/commit_gate/tests"]
+testpaths = ["src/commit_gate/tests", "src/shared/tests"]

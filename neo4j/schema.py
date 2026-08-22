@@ -4,6 +4,8 @@ from typing import Any
 
 from neo4j import Driver
 
+from .constants import GRAPH_LABELS
+
 # Relationship types accepted by the generic add_relation() linker.
 # Keeping an explicit allowlist means relationship type is never interpolated
 # from untrusted input.
@@ -22,11 +24,8 @@ REL_WHITELIST = {
     "ELABORATED_INTO",
 }
 
-# All node labels in the metagraph.
-LABELS = (
-    "Proof", "State", "Claim", "Move", "Attempt", "Route", "Artifact",
-    "Context", "Hypothesis", "Concept", "Critique", "Experiment", "Verification",
-)
+# All node labels in the metagraph, from the shared vocabulary.
+LABELS = tuple(sorted(GRAPH_LABELS))
 
 
 def ensure_constraints(driver: Driver) -> None:

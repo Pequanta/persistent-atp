@@ -23,6 +23,7 @@ from .vocab import (
     TERMINAL_EXECUTOR_FAILURES,
     AlignmentLifecycle,
     AlignmentVerdict,
+    AttemptStatus,
     CertificateStatus,
     ClaimStatus,
     DeclarationStatus,
@@ -62,6 +63,7 @@ ENUM_FIELDS: dict[tuple[str, str], type] = {
     ("TacticApplication", "executor_result"): ExecutorResult,
     ("LeanReplay", "status"): ReplayStatus,
     ("Obstruction", "kind"): ObstructionKind,
+    ("Attempt", "status"): AttemptStatus,
     ("Attempt", "worker_class"): WorkerClass,
 }
 """Fields whose values must come from a closed vocabulary."""

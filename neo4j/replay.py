@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .constants import CLAIM_CONJECTURAL, MOVE_OPEN, STATE_KIND_OR
+
 
 class ReplayMixin:
     """Journal replay: wipe-and-rebuild from event log.
@@ -28,18 +30,18 @@ class ReplayMixin:
         elif t == "state_added":
             st = p["state"]
             self.add_state(proof_id, st["id"], st["description"], st.get("parent"),
-                           kind=st.get("kind", "or"), assumptions=st.get("assumptions", ""),
+                           kind=st.get("kind", STATE_KIND_OR), assumptions=st.get("assumptions", ""),
                            event_id=evt)
         elif t == "claim_added":
             c = p["claim"]
-            self.add_claim(proof_id, c["id"], c["statement"], c.get("status", "conjectural"), event_id=evt)
+            self.add_claim(proof_id, c["id"], c["statement"], c.get("status", CLAIM_CONJECTURAL), event_id=evt)
         elif t == "claim_dependency_added":
             self.add_claim_dependency(p["dependent_claim_id"], p["depends_on_claim_id"], proof_id, evt)
         elif t == "move_added":
             mv = p["move"]
             self.add_move(proof_id, mv["id"], mv["state_id"], mv["move_summary"],
                           mv.get("kind", "reduction"), mv.get("note", ""), event_id=evt,
-                          status=mv.get("status", "open"))
+                          status=mv.get("status", MOVE_OPEN))
         elif t == "subgoal_added":
             sg = p["subgoal"]
             self.add_required_subgoal(proof_id, p["move_id"], sg["id"], sg["description"],

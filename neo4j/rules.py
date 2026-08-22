@@ -2,6 +2,21 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .constants import (
+    CLAIM_REFUTED,
+    CLAIM_TAINTED,
+    MOVE_CLOSED,
+    MOVE_DOMINATED,
+    MOVE_EXHAUSTED,
+    MOVE_LEASED,
+    MOVE_OPEN,
+    MOVE_REFUTED,
+    MOVE_REOPENED,
+    STATE_CLOSED,
+    STATE_REOPENED,
+    STATE_TAINTED,
+)
+
 
 class RulesMixin:
     """Graph semantics: AND/OR closure, taint propagation, cycle detection.
@@ -38,8 +53,8 @@ class RulesMixin:
         with self._driver.session() as s:
             rec = s.run(
                 "MATCH (st:State {proof_id: $pid, id: $sid})-[:PROPOSES]->(m:Move {proof_id: $pid}) "
-                "WHERE m.status = 'closed' RETURN count(m) AS c",
-                pid=proof_id, sid=state_id,
+                "WHERE m.status = $closed RETURN count(m) AS c",
+                pid=proof_id, sid=state_id, closed=MOVE_CLOSED,
             ).single()
             return rec["c"] > 0
 
@@ -48,9 +63,10 @@ class RulesMixin:
         with self._driver.session() as s:
             rec = s.run(
                 "MATCH (m:Move {proof_id: $pid, id: $mid})-[:REQUIRES]->(sg:State {proof_id: $pid}) "
-                "WHERE sg.status <> 'closed' AND sg.status <> 'reopened' "
+                "WHERE sg.status <> $closed AND sg.status <> $reopened "
                 "RETURN count(sg) AS open_subgoals",
                 pid=proof_id, mid=move_id,
+                closed=STATE_CLOSED, reopened=STATE_REOPENED,
             ).single()
             return rec["open_subgoals"] == 0
 
@@ -67,12 +83,12 @@ class RulesMixin:
         NOTE: BYPASSES is deliberately NOT a PROPOSES edge, so a bypass never
         closes the literal target (N107 pattern) — that is enforced structurally.
         """
-        self.update_state_status(proof_id, state_id, "closed", reason, event_id)
+        self.update_state_status(proof_id, state_id, STATE_CLOSED, reason, event_id)
         with self._driver.session() as s:
             s.run(
                 "MATCH (st:State {proof_id: $pid, id: $sid})-[:PROPOSES]->(m:Move {proof_id: $pid}) "
-                "SET m.status = 'closed', m.status_updated_in_event = $evt",
-                pid=proof_id, sid=state_id, evt=event_id,
+                "SET m.status = $closed, m.status_updated_in_event = $evt",
+                pid=proof_id, sid=state_id, evt=event_id, closed=MOVE_CLOSED,
             )
         self._propagate_closures(proof_id, event_id)
 
@@ -82,28 +98,30 @@ class RulesMixin:
                 # AND: a move closes once every REQUIRES subgoal is closed.
                 r1 = s.run(
                     "MATCH (m:Move {proof_id: $pid}) "
-                    "WHERE m.status <> 'closed' "
+                    "WHERE m.status <> $move_closed "
                     "AND NOT exists { (m)-[:REQUIRES]->(sg:State {proof_id: $pid}) "
-                    "                  WHERE sg.status <> 'closed' AND sg.status <> 'reopened' } "
-                    "SET m.status = 'closed', m.status_updated_in_event = $evt "
+                    "                  WHERE sg.status <> $closed AND sg.status <> $reopened } "
+                    "SET m.status = $move_closed, m.status_updated_in_event = $evt "
                     "RETURN count(m) AS n",
-                    pid=proof_id, evt=event_id,
+                    pid=proof_id, evt=event_id, move_closed=MOVE_CLOSED,
+                    closed=STATE_CLOSED, reopened=STATE_REOPENED,
                 ).single()["n"]
                 # OR: a state closes once any proposed move is closed.
                 r2 = s.run(
                     "MATCH (st:State {proof_id: $pid}) "
-                    "WHERE st.status <> 'closed' AND st.status <> 'reopened' "
+                    "WHERE st.status <> $closed AND st.status <> $reopened "
                     "AND exists { (st)-[:PROPOSES]->(m:Move {proof_id: $pid}) "
-                    "             WHERE m.status = 'closed' } "
-                    "SET st.status = 'closed', st.status_updated_in_event = $evt "
+                    "             WHERE m.status = $move_closed } "
+                    "SET st.status = $closed, st.status_updated_in_event = $evt "
                     "RETURN count(st) AS n",
-                    pid=proof_id, evt=event_id,
+                    pid=proof_id, evt=event_id, move_closed=MOVE_CLOSED,
+                    closed=STATE_CLOSED, reopened=STATE_REOPENED,
                 ).single()["n"]
                 if r1 == 0 and r2 == 0:
                     break
 
     def reopen_state(self, proof_id: str, state_id: str, reason: str = "", event_id: str = "") -> None:
-        self.update_state_status(proof_id, state_id, "reopened", reason, event_id)
+        self.update_state_status(proof_id, state_id, STATE_REOPENED, reason, event_id)
 
     # ------------------------------------------------------------------
     # Taint propagation (paper §4.10)
@@ -119,18 +137,20 @@ class RulesMixin:
         with self._driver.session() as s:
             s.run(
                 "MATCH (c:Claim {proof_id: $pid, id: $cid}) "
-                "SET c.status = 'refuted', c.status_updated_in_event = $evt, "
+                "SET c.status = $refuted, c.status_updated_in_event = $evt, "
                 "    c.status_reason = CASE WHEN $reason <> '' "
                 "                            THEN $reason ELSE c.status_reason END",
                 pid=proof_id, cid=claim_id, evt=event_id, reason=reason,
+                refuted=CLAIM_REFUTED,
             )
             result = s.run(
                 "MATCH (root:Claim {proof_id: $pid, id: $cid})"
                 "<-[:DEPENDS_ON*1..]-(d:Claim {proof_id: $pid}) "
-                "SET d.status = 'tainted', d.taint_source = $src, "
+                "SET d.status = $tainted, d.taint_source = $src, "
                 "    d.status_updated_in_event = $evt "
                 "RETURN collect(DISTINCT d.id) AS tainted",
                 pid=proof_id, cid=claim_id, src=claim_id, evt=event_id,
+                tainted=CLAIM_TAINTED,
             ).single()
             tainted = result["tainted"] if result else []
 
@@ -139,12 +159,13 @@ class RulesMixin:
                 reopened = s.run(
                     "MATCH (st:State {proof_id: $pid})"
                     "-[:USES_CLAIM]->(c:Claim {proof_id: $pid}) "
-                    "WHERE c.id IN $tainted AND st.status = 'closed' "
-                    "SET st.status = 'reopened', "
+                    "WHERE c.id IN $tainted AND st.status = $closed "
+                    "SET st.status = $reopened, "
                     "    st.closed_reason = 'taint: ' + $src, "
                     "    st.status_updated_in_event = $evt "
                     "RETURN collect(DISTINCT st.id) AS reopened",
                     pid=proof_id, tainted=tainted, src=claim_id, evt=event_id,
+                    closed=STATE_CLOSED, reopened=STATE_REOPENED,
                 ).single()["reopened"]
         return {"refuted": claim_id, "tainted": tainted, "reopened_states": reopened}
 
@@ -165,17 +186,19 @@ class RulesMixin:
     def eligible_frontier(self, proof_id: str) -> List[Dict[str, Any]]:
         """Eligible moves for leasing.
 
-        (Open ∪ Reopened) − (Leased ∪ Refuted ∪ Dominated ∪ Exhausted),
-        restricted to moves whose state is not tainted/refuted.
+        (Open ∪ Reopened) − (Leased ∪ Refuted ∪ Dominated ∪ Exhausted) (4.7),
+        restricted to moves whose state is neither tainted nor closed.
         """
         with self._driver.session() as s:
             result = s.run(
                 "MATCH (st:State {proof_id: $pid})-[:PROPOSES]->(m:Move {proof_id: $pid}) "
-                "WHERE m.status IN ['open', 'reopened'] "
-                "  AND m.status <> 'leased' AND m.status <> 'refuted' "
-                "  AND m.status <> 'dominated' AND m.status <> 'exhausted' "
-                "  AND st.status <> 'tainted' AND st.status <> 'refuted' AND st.status <> 'closed' "
+                "WHERE m.status IN $eligible "
+                "  AND m.status <> $leased AND m.status <> $move_refuted "
+                "  AND m.status <> $dominated AND m.status <> $exhausted "
+                "  AND st.status <> $tainted AND st.status <> $closed "
                 "RETURN m ORDER BY m.status, m.id",
-                pid=proof_id,
+                pid=proof_id, eligible=[MOVE_OPEN, MOVE_REOPENED], leased=MOVE_LEASED,
+                move_refuted=MOVE_REFUTED, dominated=MOVE_DOMINATED,
+                exhausted=MOVE_EXHAUSTED, tainted=STATE_TAINTED, closed=STATE_CLOSED,
             )
             return [dict(r["m"]) for r in result]

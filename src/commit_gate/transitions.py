@@ -12,23 +12,34 @@ __all__ = ["STATUS_TRANSITIONS", "IMMUTABLE_FIELDS"]
 # (Label, field) -> {from_value -> {allowed_to_values}}
 STATUS_TRANSITIONS: Final[dict[tuple[str, str], dict[str, frozenset[str]]]] = {
     ("FormalState", "status"): {
-        "open": frozenset({"expanded", "formally-closed", "failed", "pruned", "stale"}),
-        "expanded": frozenset({"formally-closed", "failed", "pruned", "stale"}),
-        "formally-closed": frozenset({"lean-verified", "stale"}),
-        "lean-verified": frozenset({"stale"}),
+        "open": frozenset({"expanded", "formally-closed", "failed", "pruned", "tainted", "stale"}),
+        "expanded": frozenset({"formally-closed", "failed", "pruned", "tainted", "stale"}),
+        "formally-closed": frozenset({"lean-verified", "tainted", "stale"}),
+        "lean-verified": frozenset({"tainted", "stale"}),
+        "tainted": frozenset({"reopened", "pruned", "stale"}),
+        "reopened": frozenset(
+            {"expanded", "formally-closed", "failed", "pruned", "tainted", "stale"}
+        ),
         "failed": frozenset({"stale"}),
         "pruned": frozenset({"stale"}),
         "stale": frozenset(),
     },
     ("Claim", "status"): {
-        "conjectural": frozenset({"empirical", "provisional", "refuted", "retracted", "stale"}),
-        "empirical": frozenset({"provisional", "refuted", "retracted", "stale"}),
-        "provisional": frozenset(
-            {"critic-accepted", "formally-closed", "refuted", "retracted", "stale"}
+        "conjectural": frozenset(
+            {"empirical", "provisional", "tainted", "refuted", "retracted", "stale"}
         ),
-        "critic-accepted": frozenset({"formally-closed", "refuted", "retracted", "stale"}),
-        "formally-closed": frozenset({"lean-verified", "refuted", "retracted", "stale"}),
-        "lean-verified": frozenset({"stale"}),
+        "empirical": frozenset({"provisional", "tainted", "refuted", "retracted", "stale"}),
+        "provisional": frozenset(
+            {"critic-accepted", "formally-closed", "tainted", "refuted", "retracted", "stale"}
+        ),
+        "critic-accepted": frozenset(
+            {"formally-closed", "tainted", "refuted", "retracted", "stale"}
+        ),
+        "formally-closed": frozenset(
+            {"lean-verified", "tainted", "refuted", "retracted", "stale"}
+        ),
+        "lean-verified": frozenset({"tainted", "stale"}),
+        "tainted": frozenset({"refuted", "retracted", "stale"}),
         "refuted": frozenset({"stale"}),
         "retracted": frozenset({"stale"}),
         "stale": frozenset(),
@@ -80,10 +91,22 @@ STATUS_TRANSITIONS: Final[dict[tuple[str, str], dict[str, frozenset[str]]]] = {
         "internal-error": frozenset(),
         "cancelled": frozenset(),
     },
+    # A graph Move is a TacticApplication: queued/leased are the leasing
+    # lifecycle (4.7), refuted/dominated/exhausted the pruning outcomes.
     ("TacticApplication", "status"): {
-        "pending": frozenset({"open", "closed", "dead"}),
-        "open": frozenset({"closed", "dead"}),
-        "closed": frozenset(),
+        "pending": frozenset({"queued", "open", "closed", "dead"}),
+        "queued": frozenset({"leased", "open", "dominated", "dead"}),
+        "leased": frozenset({"open", "closed", "refuted", "exhausted", "dead"}),
+        "open": frozenset(
+            {"leased", "closed", "refuted", "dominated", "exhausted", "dead"}
+        ),
+        "closed": frozenset({"reopened"}),
+        "reopened": frozenset(
+            {"leased", "closed", "refuted", "dominated", "exhausted", "dead"}
+        ),
+        "refuted": frozenset(),
+        "dominated": frozenset(),
+        "exhausted": frozenset(),
         "dead": frozenset(),
     },
 }
