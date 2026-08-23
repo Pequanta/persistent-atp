@@ -57,12 +57,19 @@
         "pruned",
         "stale"
       ]
+    },
+    "annotations": {
+      "$ref": "#/$defs/score_vector",
+      "description": "Scheduling features only. A state carrying scores is not one step closer to being true."
     }
   },
   "$defs": {
     "sha256": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "score_vector": {
+      "$ref": "https://persistent-atp.invalid/schemas/score-vector.schema.json"
     }
   }
 }
