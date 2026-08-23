@@ -1,0 +1,66 @@
+{
+  "proof_id": "nseries",
+  "source": "OmegaClaw-Math legacy package, N105-N109 research progression, imported as-is per Section 14.5",
+  "note": "Node ids intentionally preserve the legacy N-series names instead of the Appendix A allocator grammar; the import must not rewrite provenance. No formal-layer objects (FormalDeclaration, Alignment, FormalState...) exist here by design: alignment records are Phase 4 scope (see PENDING_FORMAL_LINKS.md).",
+  "phase4_todo_claims_needing_formal_declarations": [
+    "nseries/N105",
+    "nseries/N106",
+    "nseries/N108"
+  ],
+  "proposals": [
+    {
+      "actor": "maintenance-importer",
+      "worker_class": "maintenance",
+      "ops": [
+        {"op": "upsert_node", "label": "Claim", "id": "nseries/N105", "fields": {"status": "conjectural", "claim_text": "N105: every non-trivial abelian group has a proper subgroup.", "tag": "algebra"}},
+        {"op": "upsert_node", "label": "Claim", "id": "nseries/N106", "fields": {"status": "conjectural", "claim_text": "N106: compression of N105+N107 -- every finite p-group has a non-trivial center.", "tag": "algebra"}},
+        {"op": "upsert_node", "label": "Claim", "id": "nseries/N107", "fields": {"status": "conjectural", "claim_text": "N107: subgroups of index p are normal (for smallest prime divisor).", "tag": "algebra"}},
+        {"op": "upsert_node", "label": "Claim", "id": "nseries/N108", "fields": {"status": "empirical", "claim_text": "N108: counterexample-guided strengthening of the index-p normality argument.", "tag": "algebra"}},
+        {"op": "upsert_node", "label": "Claim", "id": "nseries/N109", "fields": {"status": "conjectural", "claim_text": "N109: residual open target -- solvability of groups of order p^2 q.", "tag": "algebra"}},
+        {"op": "upsert_node", "label": "Route", "id": "nseries/R-old", "fields": {"summary": "direct route through N107"}},
+        {"op": "upsert_node", "label": "Route", "id": "nseries/R-bypass", "fields": {"summary": "bypass route skipping the N107 lemma entirely"}}
+      ]
+    },
+    {
+      "actor": "llm-research-1",
+      "worker_class": "llm-research",
+      "lease_id": "lease-import",
+      "fencing_token": 1,
+      "ops": [
+        {"op": "add_edge", "rel": "COMPRESSES", "src": "nseries/N106", "dst": "nseries/N105", "edge_id": "nseries/e-1"},
+        {"op": "add_edge", "rel": "COMPRESSES", "src": "nseries/N106", "dst": "nseries/N107", "edge_id": "nseries/e-2"},
+        {"op": "set_field", "label": "Claim", "id": "nseries/N106", "field": "status", "value": "provisional", "prior": "conjectural"}
+      ]
+    },
+    {
+      "actor": "proof-orchestrator",
+      "worker_class": "coordinator",
+      "ops": [
+        {"op": "add_edge", "rel": "ROUTES_TO", "src": "nseries/R-old", "dst": "nseries/N107", "edge_id": "nseries/e-3"},
+        {"op": "add_edge", "rel": "BYPASSES", "src": "nseries/R-bypass", "dst": "nseries/N107", "edge_id": "nseries/e-4"},
+        {"op": "upsert_node", "label": "Obstruction", "id": "nseries/OBS-1", "fields": {"kind": "search-policy", "description": "R-old stalls: the index-p lemma needs a case explosion the search policy cannot budget.", "actor": "proof-orchestrator"}},
+        {"op": "add_edge", "rel": "BLOCKED", "src": "nseries/R-old", "dst": "nseries/OBS-1", "edge_id": "nseries/e-5"}
+      ]
+    },
+    {
+      "actor": "hyperon-creative-1",
+      "worker_class": "hyperon",
+      "lease_id": "lease-import",
+      "fencing_token": 1,
+      "ops": [
+        {"op": "set_field", "label": "Claim", "id": "nseries/N108", "field": "status", "value": "provisional", "prior": "empirical"},
+        {"op": "add_edge", "rel": "RESOLVES", "src": "nseries/N108", "dst": "nseries/OBS-1", "edge_id": "nseries/e-6"}
+      ]
+    },
+    {
+      "actor": "experiment-runner",
+      "worker_class": "experiment",
+      "ops": [
+        {"op": "upsert_node", "label": "Attempt", "id": "nseries/ATT-RAND", "fields": {"status": "supported", "worker_class": "experiment", "evidence": "random-sampling", "summary": "random small-group search found no counterexample to N109 in 10^6 samples"}},
+        {"op": "add_edge", "rel": "TARGETS", "src": "nseries/ATT-RAND", "dst": "nseries/N109", "edge_id": "nseries/e-7"},
+        {"op": "upsert_node", "label": "Attempt", "id": "nseries/ATT-SYM", "fields": {"status": "pending", "worker_class": "hyperon", "evidence": "exact-symbolic", "summary": "deterministic symbolic reduction of N109 to two residue cases"}},
+        {"op": "add_edge", "rel": "TARGETS", "src": "nseries/ATT-SYM", "dst": "nseries/N109", "edge_id": "nseries/e-8"}
+      ]
+    }
+  ]
+}
