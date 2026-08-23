@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "jsonschema>=4.0",
 ]
 
 [tool.setuptools]
@@ -25,4 +26,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-testpaths = ["src/commit_gate/tests", "src/shared/tests"]
+testpaths = ["src/commit_gate/tests", "src/shared/tests", "src/mathproof/tests"]
