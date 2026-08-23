@@ -1,17 +1,24 @@
-"""The formal ATP boundary and its deterministic fake (A2).
+"""The formal ATP boundary and its backends.
 
 ``FormalATPAdapter`` is the stable seam between the proof-store and any Lean
 backend (Section: Formal ATP Boundary). The proof-store never sees Pantograph,
 processes, or Lean errors -- only these five calls and schema-shaped results.
 
-``FakeFormalATP`` is the reference implementation for Phase 0: no real Lean
-dependency, fully deterministic, and able to emit every documented run
-disposition (6.10) on demand from its script:
+Two implementations live behind the seam:
 
-    proved-pending-replay, budget-exhausted, stagnated, counterexample,
-    invalid-request, environment-error, internal-error
+* ``FakeFormalATP`` (:mod:`mathproof.formal_atp`) -- the deterministic Phase 0
+  reference: no real Lean dependency, able to emit every documented run
+  disposition (6.10) on demand from its script:
 
-Results are built by :func:`build_result`, which derives all identifiers and
+      proved-pending-replay, budget-exhausted, stagnated, counterexample,
+      invalid-request, environment-error, internal-error
+
+* ``MathsAIFormalATP`` (:mod:`mathproof.maths_ai_atp`) -- the real backend,
+  driving the ``maths_ai`` hybrid GNN/PLN reasoner over Pantograph.
+
+Both share the request-field contract (:func:`missing_request_fields`) and the
+payload builders (:func:`build_state`, :func:`build_tactic_edge`). The fake's
+results are built by :func:`build_result`, which derives all identifiers and
 hashes canonically from the request, so identical input always yields an
 identical payload.
 """
@@ -28,6 +35,9 @@ __all__ = [
     "FormalATPAdapter",
     "FakeFormalATP",
     "build_result",
+    "build_state",
+    "build_tactic_edge",
+    "missing_request_fields",
     "EMITTABLE_DISPOSITIONS",
     "stub_replay",
 ]
@@ -63,8 +73,9 @@ class FormalATPAdapter:
     """Protocol for a Lean-backed search service.
 
     Subclassing is *not* required; any object with these methods satisfies the
-    boundary. Kept as a plain base class (not typing.Protocol) so the fake and
-    future adapters share one place that documents call semantics.
+    boundary. Kept as a plain base class (not typing.Protocol) so the fake,
+    the maths-ai backend, and future adapters share one place that documents
+    call semantics.
     """
 
     def formal_search_start(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -87,11 +98,16 @@ class FormalATPAdapter:
         raise NotImplementedError
 
 
+def missing_request_fields(request: Mapping[str, Any]) -> list[str]:
+    """Required request fields absent from ``request``, in contract order."""
+    return [f for f in REQUEST_REQUIRED_FIELDS if f not in request]
+
+
 def _digest(*parts: Any) -> str:
     return content_hash(list(parts))
 
 
-def _state(proof_id: str, serial: int, goal_text: str, env_hash: str, **extra):
+def build_state(proof_id: str, serial: int, goal_text: str, env_hash: str, **extra):
     exact = _digest("exact", goal_text, env_hash)
     semantic = _digest("semantic", goal_text)
     state = {
@@ -108,7 +124,7 @@ def _state(proof_id: str, serial: int, goal_text: str, env_hash: str, **extra):
     return state
 
 
-def _tactic_edge(
+def build_tactic_edge(
     proof_id: str,
     serial: int,
     source_state_id: str,
@@ -172,8 +188,8 @@ def build_result(disposition: str, request: Mapping[str, Any]) -> dict[str, Any]
     goal_text = request.get("goal_text", f"goal({run_id})")
 
     if disposition == RunDisposition.PROVED_PENDING_REPLAY.value:
-        root = _state(proof_id, 1, goal_text, env_hash)
-        closer = _tactic_edge(
+        root = build_state(proof_id, 1, goal_text, env_hash)
+        closer = build_tactic_edge(
             proof_id, 1, root["state_id"], "lean-accepted", 0, [],
             tactic_label="exact",
             tactic_args=[_digest("candidate-lemma").split(":")[1][:12]],
@@ -197,7 +213,7 @@ def build_result(disposition: str, request: Mapping[str, Any]) -> dict[str, Any]
         return result
 
     if disposition == RunDisposition.COUNTEREXAMPLE.value:
-        root = _state(proof_id, 1, goal_text, env_hash)
+        root = build_state(proof_id, 1, goal_text, env_hash)
         witness_artifact = _digest("witness", run_id)
         result.update(
             root_state_id=root["state_id"],
@@ -224,9 +240,9 @@ def build_result(disposition: str, request: Mapping[str, Any]) -> dict[str, Any]
         return result
 
     if disposition == RunDisposition.STAGNATED.value:
-        root = _state(proof_id, 1, goal_text, env_hash)
-        child = _state(proof_id, 2, goal_text + "' (after rw)", env_hash)
-        dead = _tactic_edge(
+        root = build_state(proof_id, 1, goal_text, env_hash)
+        child = build_state(proof_id, 2, goal_text + "' (after rw)", env_hash)
+        dead = build_tactic_edge(
             proof_id, 1, root["state_id"], "lean-rejected", 0, [],
             tactic_label="simp",
             diagnostic_artifact=_digest("diagnostic", run_id),
@@ -257,10 +273,10 @@ def build_result(disposition: str, request: Mapping[str, Any]) -> dict[str, Any]
         return result
 
     # budget-exhausted: live frontier with an unproven multi-child expansion.
-    root = _state(proof_id, 1, goal_text, env_hash)
-    left = _state(proof_id, 2, goal_text + " [left]", env_hash)
-    right = _state(proof_id, 3, goal_text + " [right]", env_hash)
-    expand = _tactic_edge(
+    root = build_state(proof_id, 1, goal_text, env_hash)
+    left = build_state(proof_id, 2, goal_text + " [left]", env_hash)
+    right = build_state(proof_id, 3, goal_text + " [right]", env_hash)
+    expand = build_tactic_edge(
         proof_id, 1, root["state_id"], "lean-accepted", 2,
         [left["state_id"], right["state_id"]],
         tactic_label="constructor",
@@ -325,7 +341,7 @@ class FakeFormalATP(FormalATPAdapter):
     # -- search lifecycle -------------------------------------------------
 
     def formal_search_start(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
-        missing = [f for f in REQUEST_REQUIRED_FIELDS if f not in request]
+        missing = missing_request_fields(request)
         if missing:
             result = build_result(RunDisposition.INVALID_REQUEST.value, request)
             result["artifacts"][0]["note"] = f"missing fields: {missing}"
