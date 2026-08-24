@@ -312,6 +312,12 @@ ANNOTATION_FIELDS = frozenset(
         "expected_information_gain",
         "verification_value",
         "repeated_failure_risk",
+        "expected_theorem_impact",
+        "novelty_and_mechanism_diversity",
+        "formalization_readiness",
+        "estimated_cost",
+        "human_priority",
+        "availability_of_suitable_worker_or_model_or_tool",
         "derived_priority",
     }
 )

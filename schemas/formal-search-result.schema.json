@@ -331,6 +331,14 @@
         "expected_information_gain": { "type": "number" },
         "verification_value": { "type": "number" },
         "repeated_failure_risk": { "type": "number" },
+        "expected_theorem_impact": { "type": "number", "minimum": 0, "maximum": 1 },
+        "novelty_and_mechanism_diversity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "formalization_readiness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "estimated_cost": { "type": "number", "minimum": 0 },
+        "human_priority": { "type": "number", "minimum": 0, "maximum": 1 },
+        "availability_of_suitable_worker_or_model_or_tool": {
+          "type": "number", "minimum": 0, "maximum": 1
+        },
         "derived_priority": { "type": "number" }
       }
     }
