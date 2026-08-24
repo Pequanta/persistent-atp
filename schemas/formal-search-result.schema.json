@@ -135,6 +135,8 @@
         "goal_text": { "type": "string" },
         "exact_state_hash": { "$ref": "#/$defs/sha256" },
         "semantic_signature": { "$ref": "#/$defs/sha256" },
+        "environment_hash": { "$ref": "#/$defs/sha256" },
+        "is_theorem": { "type": "boolean" },
         "status": {
           "description": "Mirrors commit_gate.vocab.FormalStateStatus.",
           "enum": [
