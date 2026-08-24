@@ -104,6 +104,47 @@ class TestLeanReplay(unittest.TestCase):
         self.assertEqual(verdict["rejection_reason"], "goals-remaining")
 
 
+class TestAxiomPolicy(unittest.TestCase):
+    def test_native_decide_is_refused_before_any_lean_run(self):
+        driver = FakeDriver()
+        cert = certificate(tactics=[{"label": "native_decide"}])
+        verdict = lean_replay_fn(lambda: driver)(cert, ENV)
+        self.assertEqual(verdict["status"], "rejected")
+        self.assertEqual(verdict["rejection_reason"], "axiom-policy:native_decide")
+        self.assertIsNone(driver.started)
+
+    def test_user_declared_axiom_outside_the_standard_closure_is_refused(self):
+        cert = certificate(
+            lean_source="axiom myFake : False\ntheorem boom : False := myFake"
+        )
+        verdict = replay_fn()(cert, ENV)
+        self.assertEqual(verdict["status"], "rejected")
+        self.assertEqual(verdict["rejection_reason"], "axiom-policy:user-axiom:myFake")
+
+    def test_standard_closure_axioms_are_allowed_by_default(self):
+        driver = FakeDriver()
+        cert = certificate(lean_source="theorem c : p ∨ ¬p := Classical.em p")
+        verdict = lean_replay_fn(lambda: driver)(cert, ENV)
+        self.assertEqual(verdict["status"], "verified")
+
+    def test_stricter_profile_can_deny_the_standard_closure_too(self):
+        cert = certificate(
+            lean_source="axiom propext : ∀ {a b : Prop}, (a ↔ b) → a = b"
+        )
+        verdict = replay_fn()(cert, ENV)
+        self.assertEqual(verdict["status"], "verified")
+
+        strict = lean_replay_fn(FakeDriver, allowed_axioms=frozenset())
+        verdict = strict(cert, ENV)
+        self.assertEqual(verdict["status"], "rejected")
+        self.assertEqual(verdict["rejection_reason"], "axiom-policy:user-axiom:propext")
+
+    def test_dotted_axiom_names_are_captured_whole(self):
+        cert = certificate(lean_source="axiom Foo.helper : False")
+        verdict = replay_fn()(cert, ENV)
+        self.assertIn("Foo.helper", verdict["rejection_reason"])
+
+
 class TestReplayThroughTheSeam(unittest.TestCase):
     def test_formal_replay_carries_the_real_verdict(self):
         atp = MathsAIFormalATP(replay_fn=lean_replay_fn(FakeDriver))

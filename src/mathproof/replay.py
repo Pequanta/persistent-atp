@@ -19,8 +19,12 @@ import asyncio
 import re
 from typing import Any, Callable, Mapping, Protocol
 
+from commit_gate.vocab import STANDARD_LEAN_AXIOMS
+
 __all__ = [
     "SORRY_PATTERN",
+    "AXIOM_DECLARATION",
+    "NATIVE_DECIDE_PATTERN",
     "ReplayDriver",
     "scan_for_sorry",
     "lean_replay_fn",
@@ -30,10 +34,17 @@ __all__ = [
 SORRY_PATTERN = re.compile(r"\b(sorry|admit)\b")
 """Any tactic text containing these terminates replay as unsound."""
 
+AXIOM_DECLARATION = re.compile(r"\baxiom\s+([A-Za-z_][\w'.!]*)")
+"""Captures the name of every `axiom` declaration in a scanned text."""
+
+NATIVE_DECIDE_PATTERN = re.compile(r"\bnative_decide\b")
+"""native_decide trusts compiled code where the kernel would check a term."""
+
 REJECTION_ENVIRONMENT_DRIFT = "environment-drift"
 REJECTION_NO_PAYLOAD = "certificate-payload-unavailable"
 REJECTION_SORRY = "sorry-detected-in-script"
 REJECTION_GOALS_REMAINING = "goals-remaining"
+REJECTION_NATIVE_DECIDE = "axiom-policy:native_decide"
 
 
 class ReplayDriver(Protocol):
@@ -78,12 +89,20 @@ def _tactic_text(step: Mapping[str, Any]) -> str:
     return " ".join(p for p in parts if p)
 
 
-def lean_replay_fn(driver_factory: Callable[[], ReplayDriver]) -> Any:
+def lean_replay_fn(
+    driver_factory: Callable[[], ReplayDriver],
+    *,
+    allowed_axioms: frozenset[str] = STANDARD_LEAN_AXIOMS,
+) -> Any:
     """Build a ReplayFn that checks the script instead of trusting it.
 
     Order of refusal, cheapest first: environment drift, missing payload,
-    sorry in the script (no Lean session is even started), then kernel
-    outcomes. Every failure mode names itself in ``rejection_reason``.
+    then the text policy -- sorry/admit, `native_decide`, and any `axiom`
+    declaration outside ``allowed_axioms`` (the standard Lean closure by
+    default, since mathlib proofs transitively rest on all three) -- and
+    only then kernel outcomes. Every failure mode names itself in
+    ``rejection_reason``. Scans cover the tactic script plus an optional
+    ``lean_source`` payload field, which is where declarations live.
     """
 
     def replay(certificate: Mapping[str, Any], environment_hash: str) -> dict[str, Any]:
@@ -102,8 +121,23 @@ def lean_replay_fn(driver_factory: Callable[[], ReplayDriver]) -> Any:
             return _verdict("rejected", environment_hash, False, REJECTION_NO_PAYLOAD)
 
         scripts = [_tactic_text(step) for step in steps]
-        if any(scan_for_sorry(script) for script in scripts):
+        scanned = list(scripts)
+        if certificate.get("lean_source"):
+            scanned.append(str(certificate["lean_source"]))
+
+        if any(scan_for_sorry(text) for text in scanned):
             return _verdict("rejected", environment_hash, True, REJECTION_SORRY)
+        for text in scanned:
+            if NATIVE_DECIDE_PATTERN.search(text):
+                return _verdict("rejected", environment_hash, False, REJECTION_NATIVE_DECIDE)
+            for name in AXIOM_DECLARATION.findall(text):
+                if name not in allowed_axioms:
+                    return _verdict(
+                        "rejected",
+                        environment_hash,
+                        False,
+                        f"axiom-policy:user-axiom:{name}",
+                    )
 
         try:
             driver = driver_factory()
