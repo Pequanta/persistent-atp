@@ -109,6 +109,29 @@ STATUS_TRANSITIONS: Final[dict[tuple[str, str], dict[str, frozenset[str]]]] = {
         "exhausted": frozenset(),
         "dead": frozenset(),
     },
+    # The research layer's minimal lifecycle (A.1). A research move whose
+    # parent state was superseded or refuted leaves the frontier; pruning
+    # outcomes are terminal, stale is the sink.
+    ("ResearchState", "status"): {
+        "open": frozenset({"superseded", "refuted", "stale"}),
+        "superseded": frozenset({"stale"}),
+        "refuted": frozenset({"stale"}),
+        "stale": frozenset(),
+    },
+    ("ResearchMove", "status"): {
+        "queued": frozenset({"leased", "open", "dominated", "exhausted", "stale"}),
+        "open": frozenset(
+            {"leased", "closed", "refuted", "dominated", "exhausted", "stale"}
+        ),
+        "leased": frozenset(
+            {"open", "closed", "refuted", "dominated", "exhausted", "stale"}
+        ),
+        "closed": frozenset({"stale"}),
+        "refuted": frozenset(),
+        "dominated": frozenset(),
+        "exhausted": frozenset(),
+        "stale": frozenset(),
+    },
 }
 
 # Fields that can be set in UpsertNode but never changed via SetField.

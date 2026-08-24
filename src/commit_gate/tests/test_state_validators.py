@@ -91,5 +91,96 @@ class TestStateValidators(unittest.TestCase):
         )
         self.assertEqual(self.validate(proposal), [])
 
+
+class TestCriticGating(unittest.TestCase):
+    """10.6: provisional -> critic-accepted needs a favorable critic verdict."""
+
+    def setUp(self):
+        self.view = MemoryView()
+        self.view.add_node("p1/c-1", "Claim", {"status": "provisional"})
+
+    def promote(self, *ops) -> list[Reason]:
+        proposal = Proposal(
+            proof_id="p1",
+            actor="coordinator",
+            worker_class="coordinator",
+            ops=(SetField("Claim", "p1/c-1", "status", "critic-accepted", prior="provisional"),)
+            + tuple(ops),
+            base_revision=0,
+            lease_id="lease-1",
+            fencing_token=1,
+        )
+        return [f.reason for f in validate_proposal(proposal, self.view)]
+
+    def critic_attempt(self, attempt_id: str, status: str = "critic-accepted") -> tuple:
+        return (
+            UpsertNode(
+                "Attempt",
+                attempt_id,
+                {"actor": "critic-a", "worker_class": "critic", "status": status},
+            ),
+            AddEdge("REVIEWS_CLAIM", attempt_id, "p1/c-1", f"{attempt_id}-rev"),
+        )
+
+    def test_promotion_without_a_verdict_is_rejected(self):
+        self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, self.promote())
+
+    def test_promotion_with_attached_favorable_verdict_passes(self):
+        self.assertEqual(self.promote(*self.critic_attempt("p1/at-1")), [])
+
+    def test_promotion_on_a_committed_verdict_passes(self):
+        self.view.add_node(
+            "p1/at-9",
+            "Attempt",
+            {"worker_class": "critic", "status": "supported"},
+        )
+        self.view.add_edge("REVIEWS_CLAIM", "p1/at-9", "p1/c-1", "p1/e-rev")
+        self.assertEqual(self.promote(), [])
+
+    def test_a_pending_critique_is_not_a_verdict(self):
+        reasons = self.promote(*self.critic_attempt("p1/at-1", status="pending"))
+        self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, reasons)
+
+    def test_a_refuted_critique_cannot_promote(self):
+        reasons = self.promote(*self.critic_attempt("p1/at-1", status="refuted"))
+        self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, reasons)
+
+    def test_a_non_critic_reviewer_cannot_promote(self):
+        attempt = (
+            UpsertNode(
+                "Attempt",
+                "p1/at-1",
+                {"actor": "llm-a", "worker_class": "llm-research", "status": "supported"},
+            ),
+            AddEdge("REVIEWS_CLAIM", "p1/at-1", "p1/c-1", "p1/e-rev"),
+        )
+        reasons = self.promote(*attempt)
+        self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, reasons)
+
+    def test_other_claim_transitions_need_no_verdict(self):
+        proposal = Proposal(
+            proof_id="p1",
+            actor="human",
+            worker_class="human",
+            ops=(
+                SetField("Claim", "p1/c-1", "status", "refuted", prior="provisional"),
+            ),
+            base_revision=0,
+            lease_id="lease-1",
+            fencing_token=1,
+        )
+        findings = validate_proposal(proposal, self.view)
+        self.assertNotIn(Reason.CRITIC_VERDICT_REQUIRED, [f.reason for f in findings])
+
+    def test_unrelated_promotions_are_untouched(self):
+        # A different claim's promotion does not satisfy this one.
+        self.view.add_node("p1/c-2", "Claim", {"status": "provisional"})
+        self.view.add_node(
+            "p1/at-2", "Attempt", {"worker_class": "critic", "status": "supported"}
+        )
+        self.view.add_edge("REVIEWS_CLAIM", "p1/at-2", "p1/c-2", "p1/e-rev2")
+        self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, self.promote())
+
+
 if __name__ == "__main__":
     unittest.main()

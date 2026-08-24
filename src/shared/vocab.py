@@ -25,6 +25,8 @@ __all__ = [
     "FormalStateStatus",
     "StateStatus",
     "StateKind",
+    "ResearchStateStatus",
+    "ResearchMoveStatus",
     "DeclarationStatus",
     "CertificateStatus",
     "AlignmentLifecycle",
@@ -92,6 +94,38 @@ class StateKind(StrEnum):
     OR = "or"
     AND = "and"
     GOAL = "goal"
+
+
+class ResearchStateStatus(StrEnum):
+    """Research state operational status (A.1).
+
+    The minimal lifecycle the global scheduler needs: a move whose parent
+    state is ``superseded`` or ``refuted`` leaves the eligible frontier
+    (Section 3.4) until the taint is resolved.
+    """
+
+    OPEN = "open"
+    SUPERSEDED = "superseded"
+    REFUTED = "refuted"
+    STALE = "stale"
+
+
+class ResearchMoveStatus(StrEnum):
+    """Research move status: leasing plus pruning outcomes (A.1, 4.7).
+
+    ``queued``/``open`` are the frontier statuses the scheduler leases from;
+    ``leased`` marks an active dispatch; ``refuted``/``dominated``/
+    ``exhausted`` are pruning outcomes.
+    """
+
+    QUEUED = "queued"
+    OPEN = "open"
+    LEASED = "leased"
+    CLOSED = "closed"
+    REFUTED = "refuted"
+    DOMINATED = "dominated"
+    EXHAUSTED = "exhausted"
+    STALE = "stale"
 
 
 class TacticStatus(StrEnum):
@@ -337,6 +371,8 @@ GATE_LABELS = frozenset(
         "Obstruction",
         "Attempt",
         "Artifact",
+        "ResearchState",
+        "ResearchMove",
     }
     | GRAPH_ONLY_LABELS
 )

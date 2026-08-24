@@ -31,6 +31,8 @@ from .vocab import (
     FormalStateStatus,
     ObstructionKind,
     ReplayStatus,
+    ResearchMoveStatus,
+    ResearchStateStatus,
     RunDisposition,
     TacticStatus,
     WorkerClass,
@@ -41,6 +43,7 @@ __all__ = [
     "check_concurrency_tokens",
     "check_vocabulary",
     "check_namespace",
+    "check_worker_authority",
     "check_subgoal_conservation",
     "check_executor_result",
     "check_annotation_separation",
@@ -49,6 +52,7 @@ __all__ = [
     "check_status_transitions",
     "check_immutability",
     "check_stagnation_obstruction",
+    "check_critic_gating",
 ]
 
 ENUM_FIELDS: dict[tuple[str, str], type] = {
@@ -65,6 +69,8 @@ ENUM_FIELDS: dict[tuple[str, str], type] = {
     ("Obstruction", "kind"): ObstructionKind,
     ("Attempt", "status"): AttemptStatus,
     ("Attempt", "worker_class"): WorkerClass,
+    ("ResearchState", "status"): ResearchStateStatus,
+    ("ResearchMove", "status"): ResearchMoveStatus,
 }
 """Fields whose values must come from a closed vocabulary."""
 
@@ -72,6 +78,57 @@ CLOSED_STATE_VALUES = frozenset(
     {FormalStateStatus.FORMALLY_CLOSED.value, FormalStateStatus.LEAN_VERIFIED.value}
 )
 TERMINAL_FAILURE_VALUES = frozenset(m.value for m in TERMINAL_EXECUTOR_FAILURES)
+
+FAVORABLE_CRITIC_VERDICTS = frozenset(
+    {AttemptStatus.SUPPORTED.value, AttemptStatus.CRITIC_ACCEPTED.value}
+)
+"""Critic attempt outcomes that can back a `provisional -> critic-accepted`
+promotion (10.6). A pending or refuted critique is not a verdict."""
+
+TRUSTED_WORKER_CLASSES = frozenset(
+    {
+        WorkerClass.COORDINATOR.value,
+        WorkerClass.MAINTENANCE.value,
+        WorkerClass.HUMAN.value,
+    }
+)
+"""Actors that may write any label: they operate the store, not one proof."""
+
+WORKER_CLASS_AUTHORITY: dict[str, frozenset[str]] = {
+    WorkerClass.FORMAL_ATP.value: frozenset(
+        {
+            "FormalState",
+            "TacticApplication",
+            "FormalRun",
+            "FormalCheckpoint",
+            "Certificate",
+            "Obstruction",
+            "Environment",
+        }
+    ),
+    WorkerClass.REPLAYER.value: frozenset({"LeanReplay", "Certificate"}),
+    WorkerClass.LLM_RESEARCH.value: frozenset(
+        {"Claim", "SpeculativeHypothesis", "ResearchState", "ResearchMove"}
+    ),
+    WorkerClass.CRITIC.value: frozenset({"Attempt", "Critique", "Claim"}),
+    WorkerClass.ALIGNMENT_REVIEWER.value: frozenset({"Alignment", "Artifact", "Claim"}),
+    WorkerClass.HYPERON.value: frozenset(
+        {"Claim", "SpeculativeHypothesis", "ResearchState", "ResearchMove"}
+    ),
+    WorkerClass.EXPERIMENT.value: frozenset({"Experiment"}),
+}
+"""The atom labels each worker class may create or overwrite (3.2).
+
+Issuing multi-class leases is unsafe without this: an explorer must not close
+formal states, and a critic must not invent declarations. A worker_class
+outside this table (and outside `TRUSTED_WORKER_CLASSES`) is unmanaged -- the
+scheduler never issues it a lease, so its proposals are not policed here.
+"""
+
+UNIVERSAL_WORKER_AUTHORITY = frozenset({"Attempt"})
+"""Provenance every worker journals about its own work (11.2): any
+schedulable class may create the Attempt that closes its result."""
+
 
 UNSCOPED_LABELS = frozenset({"Artifact"})
 """Labels that are content-addressed and therefore carry no proof scope."""
@@ -100,6 +157,9 @@ EDGE_ENDPOINTS: dict[str, tuple[str, str]] = {
     "AT_STATE": ("Obstruction", "FormalState"),
     "RESOLVES": ("Claim", "Obstruction"),
     "HAS_TARGET": ("Proof", "Claim"),
+    "PROPOSES": ("ResearchState", "ResearchMove"),
+    "MOVE_TARGETS": ("ResearchMove", "Claim"),
+    "REVIEWS_CLAIM": ("Attempt", "Claim"),
 }
 """Required endpoint labels per relationship type.
 
@@ -119,6 +179,7 @@ def validate_proposal(proposal: Proposal, view: ReadView | None = None) -> list[
     findings.extend(check_concurrency_tokens(proposal))
     findings.extend(check_vocabulary(proposal))
     findings.extend(check_namespace(proposal))
+    findings.extend(check_worker_authority(proposal))
     findings.extend(check_subgoal_conservation(proposal))
     findings.extend(check_executor_result(proposal))
     findings.extend(check_annotation_separation(proposal))
@@ -129,6 +190,7 @@ def validate_proposal(proposal: Proposal, view: ReadView | None = None) -> list[
         findings.extend(check_status_transitions(proposal, view))
         findings.extend(check_immutability(proposal, view))
         findings.extend(check_stagnation_obstruction(proposal, view))
+        findings.extend(check_critic_gating(proposal, view))
 
     return findings
 
@@ -220,6 +282,29 @@ def _identities(op: Op) -> Iterator[tuple[str, Any]]:
         yield "edge id", op.edge_id
     elif isinstance(op, RemoveEdge):
         yield "edge id", op.edge_id
+
+
+def check_worker_authority(proposal: Proposal) -> Iterator[Rejection]:
+    """3.2: a worker class writes only the atom types it has authority over.
+
+    Edge ops are not checked here -- their endpoints are label-checked
+    elsewhere, and creating an edge between two existing nodes changes no
+    atom's type.
+    """
+    worker_class = proposal.worker_class
+    authority = WORKER_CLASS_AUTHORITY.get(worker_class)
+    if authority is None or worker_class in TRUSTED_WORKER_CLASSES:
+        return
+    authority = authority | UNIVERSAL_WORKER_AUTHORITY
+
+    for index, op in enumerate(proposal.ops):
+        if isinstance(op, (UpsertNode, SetField)) and op.label not in authority:
+            yield Rejection(
+                Reason.WORKER_CLASS_OUT_OF_AUTHORITY,
+                f"worker class {worker_class!r} has no authority over "
+                f"{op.label} nodes (authority: {sorted(authority)})",
+                index,
+            )
 
 
 def _is_content_addressed(identity: Any) -> bool:
@@ -565,3 +650,66 @@ def check_stagnation_obstruction(proposal: Proposal, view: ReadView) -> Iterator
                 f"FormalRun {op.node_id!r} marked stagnated without a RAISED_OBSTRUCTION edge",
                 index,
             )
+
+
+def check_critic_gating(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """10.6: `provisional -> critic-accepted` requires critic-verdict evidence.
+
+    The promotion must carry, in the same proposal or already committed, a
+    `REVIEWS_CLAIM` edge from an `Attempt` whose worker_class is `critic` and
+    whose status is a favorable verdict. A pending or refuted critique cannot
+    promote; the scheduler's frontier filters on the promoted status, so a
+    claim could otherwise reach it on its own say-so.
+    """
+    promotions: list[tuple[int, str]] = [
+        (index, op.node_id)
+        for index, op in enumerate(proposal.ops)
+        if isinstance(op, SetField)
+        and op.label == "Claim"
+        and op.field == "status"
+        and op.value == ClaimStatus.CRITIC_ACCEPTED.value
+    ]
+    if not promotions:
+        return
+
+    proposed_attempts: dict[str, tuple[str | None, str | None]] = {}
+    proposed_reviews: dict[str, set[str]] = defaultdict(set)
+    for op in proposal.ops:
+        if isinstance(op, UpsertNode) and op.label == "Attempt":
+            fields = dict(op.fields or {})
+            proposed_attempts[op.node_id] = (
+                fields.get("worker_class"),
+                fields.get("status"),
+            )
+        elif isinstance(op, AddEdge) and op.rel_type == "REVIEWS_CLAIM":
+            proposed_reviews[op.dst_id].add(op.src_id)
+
+    for index, claim_id in promotions:
+        verdicts: list[tuple[str | None, str | None]] = []
+        # Verdicts proposed alongside the promotion...
+        for attempt_id in proposed_reviews.get(claim_id, ()):
+            if attempt_id in proposed_attempts:
+                verdicts.append(proposed_attempts[attempt_id])
+        # ...and verdicts already committed against this claim.
+        for edge in view.edges_to(claim_id, "REVIEWS_CLAIM"):
+            record = view.node(edge.src_id)
+            if record is not None and record.label == "Attempt":
+                fields = dict(record.fields)
+                verdicts.append(
+                    (fields.get("worker_class"), fields.get("status"))
+                )
+
+        if any(
+            worker_class == WorkerClass.CRITIC.value
+            and status in FAVORABLE_CRITIC_VERDICTS
+            for worker_class, status in verdicts
+        ):
+            continue
+
+        yield Rejection(
+            Reason.CRITIC_VERDICT_REQUIRED,
+            f"Claim {claim_id!r} cannot be promoted to critic-accepted "
+            "without a favorable critic verdict (a REVIEWS_CLAIM edge from "
+            "an accepted critic Attempt)",
+            index,
+        )
