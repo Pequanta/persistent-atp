@@ -9,7 +9,6 @@ description = "A durable, race-safe metagraph memory system for long-horizon aut
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mathematics-ai-atp",
     "python-dotenv>=1.0",
 ]
 
