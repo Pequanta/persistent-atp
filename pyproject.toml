@@ -17,6 +17,13 @@ dev = [
     "pytest>=8.0",
     "jsonschema>=4.0",
 ]
+# The production backend is not on PyPI and lives in a private repository,
+# so plain pip cannot resolve it — [tool.uv.sources] below applies to uv
+# only. Install it with `uv sync --extra real-atp`; everything else
+# (including the full test suite) runs without it, against injected fakes.
+real-atp = [
+    "mathematics-ai-atp",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
