@@ -2,9 +2,10 @@
 
 Phase 0 modules that sit above the commit gate:
 
-* :mod:`mathproof.ids` -- the Appendix A identifier namespace and allocator.
+* :mod:`mathproof.ids` -- the identifier namespace and allocator.
 * :mod:`mathproof.schemas` -- JSON Schema loading for ``schemas/``.
 * :mod:`mathproof.formal_atp` -- the FormalATPAdapter boundary + fake ATP.
+* :mod:`mathproof.maths_ai_atp` -- the production ATP backend over maths-ai.
 * :mod:`mathproof.soundness` -- structural validation of search results.
 """
 
@@ -13,6 +14,9 @@ from .formal_atp import (
     FakeFormalATP,
     FormalATPAdapter,
     build_result,
+    build_state,
+    build_tactic_edge,
+    missing_request_fields,
     stub_replay,
 )
 from .ids import (
@@ -26,6 +30,7 @@ from .ids import (
     local_id,
     parse_local_id,
 )
+from .maths_ai_atp import MathsAIFormalATP
 from .soundness import (
     SoundnessReason,
     SoundnessViolation,
@@ -48,7 +53,11 @@ __all__ = [
     "EMITTABLE_DISPOSITIONS",
     "FakeFormalATP",
     "FormalATPAdapter",
+    "MathsAIFormalATP",
     "build_result",
+    "build_state",
+    "build_tactic_edge",
+    "missing_request_fields",
     "stub_replay",
     # soundness
     "SoundnessReason",
