@@ -18,6 +18,7 @@ Invariants this module must never break (2.4 / 7 / 9):
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -35,7 +36,6 @@ from commit_gate.vocab import (
     RunDisposition,
     WorkerClass,
 )
-from .ids import IdType, full_id
 
 __all__ = [
     "Candidate",
@@ -222,7 +222,7 @@ class GlobalScheduler:
         self._policy = policy or SchedulerPolicy()
         self._clock = clock
         self.statistics = statistics or SchedulerStatistics()
-        self._serials: dict[str, int] = {}
+        self._lease_lock = threading.Lock()
 
     # -- public entry point -------------------------------------------------
 
@@ -236,38 +236,44 @@ class GlobalScheduler:
 
         Returns None when nothing is eligible -- the outer coordinator's cue
         to audit or expand the frontier, never an error.
+
+        Scoring runs over a committed-state snapshot; the grant itself is one
+        journal transaction (`dispatch_lease`), which re-checks move coverage
+        under the lock. Two racing schedulers therefore never double-dispatch
+        a move or share a fencing token -- Section 2.2's failure mode cannot
+        occur; the loser falls through to its next candidate.
         """
-        active_moves = {
-            row.selected_move_id
-            for row in self._store.active_leases(proof_id)
-            if row.selected_move_id is not None
-        }
-        frontier = [
-            candidate
-            for candidate in self.build_frontier(proof_id)
-            if candidate.move_id not in active_moves
-        ]
-        if not frontier:
-            return None
+        with self._lease_lock:
+            active_moves = {
+                row.selected_move_id
+                for row in self._store.active_leases(proof_id)
+                if row.selected_move_id is not None
+            }
+            ranked: list[tuple[str, dict[str, float]]] = []
+            scored = []
+            for candidate in self.build_frontier(proof_id):
+                if candidate.move_id in active_moves:
+                    continue
+                features = self._feature_vector(candidate, worker_class)
+                priority, snapshot = self._policy.score(features)
+                scored.append((priority, candidate.move_id, snapshot))
+            scored.sort(key=lambda item: item[0], reverse=True)
 
-        scored = []
-        for candidate in frontier:
-            features = self._feature_vector(candidate, worker_class)
-            priority, snapshot = self._policy.score(features)
-            scored.append((priority, candidate, snapshot))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        _, chosen, snapshot = scored[0]
-
-        lease_id = self._next_lease_id(proof_id)
-        row = self._store.issue_lease(
-            proof_id,
-            lease_id,
-            worker_class=worker_class,
-            selected_move_id=chosen.move_id,
-            ttl_seconds=ttl_seconds,
-            score_snapshot=snapshot,
-        )
-        return Lease.from_row(row, snapshot, self._policy.name)
+            ranked = [(move_id, snapshot) for _, move_id, snapshot in scored]
+            row = self._store.dispatch_lease(
+                proof_id,
+                ranked,
+                worker_class=worker_class,
+                ttl_seconds=ttl_seconds,
+            )
+            if row is None:
+                return None
+            snapshot = next(
+                snapshot
+                for move_id, snapshot in ranked
+                if move_id == row.selected_move_id
+            )
+            return Lease.from_row(row, snapshot, self._policy.name)
 
     def release(self, proof_id: str, lease_id: str) -> bool:
         """Mark a dispatched lease finished (its token dies either way)."""
@@ -447,8 +453,3 @@ class GlobalScheduler:
             ):
                 return True
         return False
-
-    def _next_lease_id(self, proof_id: str) -> str:
-        serial = self._serials.get(proof_id, 0) + 1
-        self._serials[proof_id] = serial
-        return full_id(proof_id, IdType.LEASE, serial)

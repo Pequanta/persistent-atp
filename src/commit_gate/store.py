@@ -159,6 +159,14 @@ class JournalStore:
         )
         self._conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS lease_serials (
+                proof_id TEXT PRIMARY KEY,
+                last INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        self._conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS rejections (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 proof_id TEXT NOT NULL,
@@ -282,7 +290,7 @@ class JournalStore:
     def issue_lease(
         self,
         proof_id: str,
-        lease_id: str,
+        lease_id: str | None,
         *,
         worker_class: str,
         selected_move_id: str | None = None,
@@ -294,13 +302,21 @@ class JournalStore:
 
         One indivisible operation inside the journal write lock: lapse any
         due leases on this proof, supersede any active lease still held
-        against the same move, mint the next fencing token, record the lease
-        with its score snapshot in the audit trail, and return the row.
+        against the same move, mint the next fencing token and -- when
+        `lease_id` is None -- the next allocator serial for the lease
+        identity itself, record the lease with its score snapshot in the
+        audit trail, and return the row.
+
+        Passing an externally minted lease_id is allowed but racy across
+        scheduler processes; production callers pass None.
         """
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         with self._write() as conn:
             self._expire_due_leases(conn, proof_id)
+            token = self._next_token(conn, proof_id)
+            if lease_id is None:
+                lease_id = self._next_lease_id(conn, proof_id)
             if selected_move_id is not None:
                 conn.execute(
                     """
@@ -379,6 +395,93 @@ class JournalStore:
                 status="active",
             )
 
+    def dispatch_lease(
+        self,
+        proof_id: str,
+        ranked_moves: Sequence[tuple[str, dict[str, Any] | None]],
+        *,
+        worker_class: str,
+        ttl_seconds: float = 600.0,
+    ) -> LeaseRow | None:
+        """Grant the highest-ranked move that is still free -- atomically.
+
+        This is Section 2.2's indivisibility contract, enforced where it can
+        actually hold: inside one journal write transaction the store lapses
+        due leases, walks the caller-ranked candidates, skips every move an
+        active lease already covers, and issues the first survivor its own
+        fencing token and allocator identity. Two racing schedulers therefore
+        cannot double-dispatch a move or share a token; the loser simply
+        finds its candidate taken and falls through.
+
+        Returns the granted LeaseRow, or None when every candidate was
+        already covered.
+        """
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        with self._write() as conn:
+            self._expire_due_leases(conn, proof_id)
+            taken = {
+                row["selected_move_id"]
+                for row in conn.execute(
+                    """
+                    SELECT selected_move_id FROM leases
+                    WHERE proof_id = ? AND status = 'active'
+                      AND selected_move_id IS NOT NULL
+                    """,
+                    (proof_id,),
+                )
+            }
+            for move_id, score_snapshot in ranked_moves:
+                if move_id in taken:
+                    continue
+                token = self._next_token(conn, proof_id)
+                lease_id = self._next_lease_id(conn, proof_id)
+                now = self._clock()
+                revision = self.head(proof_id)[0]
+                conn.execute(
+                    """
+                    INSERT INTO leases (
+                        proof_id, lease_id, worker_class, selected_move_id,
+                        fencing_token, base_revision, ttl_seconds,
+                        issued_at, expires_at, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                    """,
+                    (
+                        proof_id,
+                        lease_id,
+                        worker_class,
+                        move_id,
+                        token,
+                        revision,
+                        ttl_seconds,
+                        now,
+                        now + ttl_seconds,
+                    ),
+                )
+                self._record_lease_event(
+                    conn,
+                    proof_id,
+                    lease_id,
+                    "issued",
+                    fencing_token=token,
+                    worker_class=worker_class,
+                    selected_move_id=move_id,
+                    score_snapshot=score_snapshot,
+                )
+                return LeaseRow(
+                    proof_id=proof_id,
+                    lease_id=lease_id,
+                    worker_class=worker_class,
+                    selected_move_id=move_id,
+                    fencing_token=token,
+                    base_revision=revision,
+                    ttl_seconds=ttl_seconds,
+                    issued_at=now,
+                    expires_at=now + ttl_seconds,
+                    status="active",
+                )
+        return None
+
     def release_lease(self, proof_id: str, lease_id: str) -> bool:
         """Mark a lease finished; its token can never commit again."""
         with self._write() as conn:
@@ -438,6 +541,23 @@ class JournalStore:
             (proof_id,),
         ).fetchone()
         return (row["top"] or 0) + 1
+
+    @staticmethod
+    def _next_lease_id(conn: sqlite3.Connection, proof_id: str) -> str:
+        """Mint `p1/ls-N` under the write lock, so racing schedulers cannot
+        collide on identity (E1 allocator grammar)."""
+        row = conn.execute(
+            "SELECT last FROM lease_serials WHERE proof_id = ?", (proof_id,)
+        ).fetchone()
+        serial = (row["last"] if row is not None else 0) + 1
+        conn.execute(
+            """
+            INSERT INTO lease_serials (proof_id, last) VALUES (?, ?)
+            ON CONFLICT(proof_id) DO UPDATE SET last = excluded.last
+            """,
+            (proof_id, serial),
+        )
+        return f"{proof_id}/ls-{serial}"
 
     def _expire_due_leases(self, conn: sqlite3.Connection, proof_id: str) -> int:
         """Lapse every active lease past its expiry; return how many."""

@@ -197,6 +197,31 @@ class TestStatistics(SchedulerCase):
         )
         self.assertAlmostEqual(vector["repeated_failure_risk"], 2 / 3)
 
+    def test_a_burned_category_loses_the_next_selection(self):
+        """Section 9.6: the frontier ordering itself must move."""
+        weights = zeroed(repeated_failure_risk=-1.0)
+        statistics = SchedulerStatistics()
+        for _ in range(4):
+            statistics.record("critic-task", "failed")
+
+        burned = GlobalScheduler(
+            fixture_view(),
+            JournalStore(),
+            policy=weights,
+            statistics=statistics,
+        )
+        clean = GlobalScheduler(
+            fixture_view(), JournalStore(), policy=weights
+        )
+
+        self.assertNotEqual(
+            burned.lease_next("p1", "coordinator").selected_move_id, "p1/c-1"
+        )
+        # Without the failure history the critic task still competes.
+        self.assertEqual(
+            clean.statistics.failure_risk("critic-task"), 0.5
+        )
+
     def test_update_statistics_records_gate_outcomes_by_category(self):
         from commit_gate.gate import CommitResult
 
@@ -206,6 +231,58 @@ class TestStatistics(SchedulerCase):
         scheduler.update_statistics(accepted, "critic-task")
         scheduler.update_statistics(refused, "critic-task")
         self.assertEqual(scheduler.statistics.attempts("critic-task"), 2)
+
+
+class TestConcurrentLeasing(SchedulerCase):
+    """Section 9.2 as an integration test: the real scheduler code, racing."""
+
+    THREADS = 6
+
+    def test_simultaneous_lease_next_never_double_dispatches(self):
+        import os
+        import tempfile
+        import threading
+
+        started = threading.Barrier(self.THREADS)
+        results: list = [None] * self.THREADS
+
+        dirpath = tempfile.TemporaryDirectory()
+        self.addCleanup(dirpath.cleanup)
+        db_path = os.path.join(dirpath.name, "leases.db")
+
+        def work(_index: int) -> object:
+            store = JournalStore(db_path)
+            view = fixture_view()  # each thread projects committed state itself
+            scheduler = GlobalScheduler(view, store, clock=lambda: 1000.0)
+            started.wait()
+            return scheduler.lease_next("p1", "coordinator")
+
+        threads = [
+            threading.Thread(target=lambda i=i: results.__setitem__(i, work(i)))
+            for i in range(self.THREADS)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        leases = [lease for lease in results if lease is not None]
+        tokens = [lease.fencing_token for lease in leases]
+        moves = [lease.selected_move_id for lease in leases]
+
+        # Every dispatched move is distinct and every token is live-unique.
+        self.assertEqual(len(moves), len(set(moves)))
+        self.assertEqual(sorted(tokens), sorted(set(tokens)))
+        # Together they cover exactly the eligible frontier.
+        self.assertEqual(set(moves), ELIGIBLE)
+
+    def test_a_superseded_dispatch_falls_through_to_the_next_candidate(self):
+        """The Section 2.2 failure mode, forced serially for determinism."""
+        first = self.scheduler().lease_next("p1", "coordinator")
+        second = self.scheduler().lease_next("p1", "coordinator")
+        # No overlap even though both schedulers scored the same frontier.
+        self.assertNotEqual(first.selected_move_id, second.selected_move_id)
+        self.assertGreater(second.fencing_token, first.fencing_token)
 
 
 class TestInvariantBoundary(SchedulerCase):
