@@ -52,6 +52,7 @@ __all__ = [
     "check_stagnation_obstruction",
     "check_claim_replay_evidence",
     "check_claim_alignment",
+    "check_environment_binding",
 ]
 
 ENUM_FIELDS: dict[tuple[str, str], type] = {
@@ -147,6 +148,7 @@ def validate_proposal(proposal: Proposal, view: ReadView | None = None) -> list[
         findings.extend(check_stagnation_obstruction(proposal, view))
         findings.extend(check_claim_replay_evidence(proposal, view))
         findings.extend(check_claim_alignment(proposal, view))
+        findings.extend(check_environment_binding(proposal, view))
 
     return findings
 
@@ -738,5 +740,84 @@ def check_claim_alignment(proposal: Proposal, view: ReadView) -> Iterator[Reject
                 Reason.PROMOTION_WITHOUT_ALIGNMENT,
                 f"claim {claim_id!r} promotes to {op.value!r} without an "
                 "alignment that is reviewed and aligned",
+                index,
+            )
+
+
+CERTIFICATE_VALID_STATUSES = frozenset(
+    {CertificateStatus.CANDIDATE.value, CertificateStatus.REPLAY_ACCEPTED.value}
+)
+"""Certificate statuses that assert the artifact is usable evidence.
+
+Committing a certificate under one of them binds it to the declaration's
+pinned toolchain; under any other environment hash it may only enter the
+graph as `stale`.
+"""
+
+
+def check_environment_binding(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A certificate is only valid under its declaration's pinned environment.
+
+    C4: after a mathlib bump, a re-run produces a different
+    environment_hash. That second certificate is not silently accepted as
+    fresh evidence -- it may only be committed as `stale`. The binding is
+    read through the run that produced the certificate (PRODUCED_CERTIFICATE,
+    then SEARCHES to the declaration, then PINNED_ENVIRONMENT to an
+    Environment); where no pin exists there is nothing to enforce and the
+    check stays silent.
+    """
+    created = _created_fields(proposal)
+    produced = _proposed_edges(proposal, "PRODUCED_CERTIFICATE")
+    searches = _proposed_edges(proposal, "SEARCHES")
+    pinned = _proposed_edges(proposal, "PINNED_ENVIRONMENT")
+
+    def committed_env_hash(env_id: str) -> Any:
+        fields = _fields_of(env_id, created, view)
+        return fields.get("environment_hash") if fields else None
+
+    for index, op in enumerate(proposal.ops):
+        if isinstance(op, UpsertNode) and op.label == "Certificate":
+            cert_id, status = op.node_id, op.fields.get("status")
+            env_hash = op.fields.get("environment_hash")
+        elif (
+            isinstance(op, SetField)
+            and op.label == "Certificate"
+            and op.field == "status"
+        ):
+            cert_id = op.node_id
+            record = view.node(cert_id)
+            if record is None:
+                continue
+            status = op.value
+            env_hash = record.fields.get("environment_hash")
+        else:
+            continue
+
+        if status not in CERTIFICATE_VALID_STATUSES or not env_hash:
+            continue
+
+        run_ids = [edge.src_id for edge in view.edges_to(cert_id, "PRODUCED_CERTIFICATE")]
+        run_ids += [src for src, dst in produced if dst == cert_id]
+
+        pinned_hashes: set[Any] = set()
+        for run_id in run_ids:
+            decl_ids = [edge.dst_id for edge in view.edges_from(run_id, "SEARCHES")]
+            decl_ids += [dst for src, dst in searches if src == run_id]
+            for decl_id in decl_ids:
+                env_ids = [
+                    edge.dst_id for edge in view.edges_from(decl_id, "PINNED_ENVIRONMENT")
+                ]
+                env_ids += [dst for src, dst in pinned if src == decl_id]
+                for env_id in env_ids:
+                    h = committed_env_hash(env_id)
+                    if h is not None:
+                        pinned_hashes.add(h)
+
+        if pinned_hashes and env_hash not in pinned_hashes:
+            yield Rejection(
+                Reason.ENVIRONMENT_DRIFT,
+                f"certificate {cert_id!r} was produced under {env_hash!r} but "
+                f"{cert_id!r}'s declaration pins {sorted(map(str, pinned_hashes))}; "
+                "commit it as stale instead",
                 index,
             )

@@ -93,3 +93,77 @@ class TestStateValidators(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+H1 = "sha256:" + "11" * 32
+H2 = "sha256:" + "22" * 32
+
+
+class TestEnvironmentBinding(unittest.TestCase):
+    """C4: a certificate under the wrong environment hash is stale, not fresh."""
+
+    def setUp(self):
+        self.view = MemoryView()
+        self.view.add_node("p1/env1", "Environment", {"environment_hash": H1})
+        self.view.add_node("p1/env2", "Environment", {"environment_hash": H2})
+        self.view.add_node("p1/fd1", "FormalDeclaration", {"status": "searching"})
+        self.view.add_node("p1/run1", "FormalRun", {"status": "proved-pending-replay"})
+        self.view.add_edge("PINNED_ENVIRONMENT", "p1/fd1", "p1/env1", "p1/e-pin")
+        self.view.add_edge("SEARCHES", "p1/run1", "p1/fd1", "p1/e-search")
+
+    def certificate(self, cert_id="p1/cert2", env="p1/env2", status="candidate"):
+        fields = {
+            "actor": "atp-worker-3",
+            "producer_run_id": "p1/run1",
+            "artifact_hash": "sha256:" + "aa" * 32,
+            "environment_hash": H1 if env == "p1/env1" else H2,
+            "status": status,
+        }
+        return [
+            UpsertNode("Certificate", cert_id, fields),
+            AddEdge("CERTIFICATE_ENVIRONMENT", cert_id, env, f"{cert_id}-env-{env}"),
+            AddEdge("PRODUCED_CERTIFICATE", "p1/run1", cert_id, f"{cert_id}-from-run"),
+        ]
+
+    def reasons(self, ops) -> set:
+        return {f.reason for f in validate_proposal(propose(*ops), self.view)}
+
+    def test_c4_second_certificate_under_new_environment_is_rejected(self):
+        found = self.reasons(self.certificate())
+        self.assertIn(Reason.ENVIRONMENT_DRIFT, found)
+
+    def test_c4_same_certificate_commits_as_stale(self):
+        ops = self.certificate(status="stale")
+        self.assertEqual(validate_proposal(propose(*ops), self.view), [])
+
+    def test_c4_matching_environment_stays_fresh(self):
+        ops = self.certificate(env="p1/env1")
+        self.assertEqual(validate_proposal(propose(*ops), self.view), [])
+
+    def test_c4_no_pinned_declaration_leaves_the_check_silent(self):
+        self.view.remove_edge("p1/e-pin")
+        self.assertNotIn(
+            Reason.ENVIRONMENT_DRIFT, self.reasons(self.certificate())
+        )
+
+    def test_c4_status_flip_to_replay_accepted_on_drifted_cert_is_rejected(self):
+        self.view.add_node(
+            "p1/cert3",
+            "Certificate",
+            {
+                "actor": "a",
+                "producer_run_id": "p1/run1",
+                "artifact_hash": "sha256:" + "bb" * 32,
+                "environment_hash": H2,
+                "status": "replay-pending",
+            },
+        )
+        self.view.add_edge(
+            "PRODUCED_CERTIFICATE", "p1/run1", "p1/cert3", "p1/e-pc3"
+        )
+        proposal = propose(
+            SetField("Certificate", "p1/cert3", "status", "replay-accepted",
+                     prior="replay-pending"),
+        )
+        found = {f.reason for f in validate_proposal(proposal, self.view)}
+        self.assertIn(Reason.ENVIRONMENT_DRIFT, found)
