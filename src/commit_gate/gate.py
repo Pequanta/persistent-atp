@@ -59,7 +59,6 @@ class CommitGate:
     def commit(self, proposal: Proposal) -> CommitResult:
         """Validate `proposal` and, if it holds, append it to the journal.
 
-        A lost race is reported as a rejection rather than raised: the proposer
         gets a code it can act on, and nothing has been written. Refused
         proposals are recorded in the rejection audit log (best-effort: if the
         journal is too busy even for that, the rejection still reaches the
