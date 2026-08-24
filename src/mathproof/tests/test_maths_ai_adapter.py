@@ -260,6 +260,27 @@ class TestMathsAIFormalATP(unittest.TestCase):
         self.assertEqual(dead["executor_result"], "lean-rejected")
         self.assertRegex(dead["diagnostic_artifact"], r"^sha256:[0-9a-f]{64}$")
 
+    def test_c6_soundness_flags_fallback_claiming_lean_acceptance(self):
+        from mathproof.soundness import SoundnessReason
+
+        result = dict(
+            MathsAIFormalATP(reasoner=StubReasoner(pln_solved_graph())).formal_search_start(REQUEST)
+        )
+        result["tactic_edges"][0]["executor_result"] = "lean-accepted"
+        reasons = [v.reason for v in validate_formal_search_result(result)]
+        self.assertIn(SoundnessReason.NON_KERNEL_CLOSURE, reasons)
+
+    def test_c6_honestly_labelled_fallback_results_stay_clean(self):
+        from mathproof.soundness import SoundnessReason
+
+        for graph in (pln_solved_graph(), mixed_root_graph()):
+            with self.subTest(graph=type(graph).__name__):
+                result = dict(
+                    MathsAIFormalATP(reasoner=StubReasoner(graph)).formal_search_start(REQUEST)
+                )
+                reasons = [v.reason for v in validate_formal_search_result(result)]
+                self.assertNotIn(SoundnessReason.NON_KERNEL_CLOSURE, reasons)
+
     def test_reasoner_failure_emits_internal_error(self):
         class Exploding:
             async def prove(self, goal, hypotheses=None):
