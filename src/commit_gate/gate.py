@@ -60,10 +60,15 @@ class CommitGate:
         """Validate `proposal` and, if it holds, append it to the journal.
 
         A lost race is reported as a rejection rather than raised: the proposer
-        gets a code it can act on, and nothing has been written.
+        gets a code it can act on, and nothing has been written. Every refusal
+        -- validation failure or concurrency loss -- is recorded on the
+        store's append-only rejection trail first: nothing merged is not the
+        same as nothing happened.
         """
         rejections = self.validate(proposal)
         if rejections:
+            self._record(proposal, [str(r.reason) for r in rejections],
+                         "; ".join(r.detail for r in rejections))
             return CommitResult(
                 accepted=False,
                 rejections=tuple(rejections),
@@ -74,6 +79,7 @@ class CommitGate:
         try:
             revision, event_hash = self._store.append(proposal.to_dict())
         except ConcurrencyError as exc:
+            self._record(proposal, [str(exc.reason)], exc.detail)
             return CommitResult(
                 accepted=False,
                 rejections=(Rejection(exc.reason, exc.detail),),
@@ -87,3 +93,12 @@ class CommitGate:
             event_hash=event_hash,
             revision=revision,
         )
+
+    def _record(self, proposal: Proposal, reasons: list[str], detail: str) -> None:
+        try:
+            self._store.record_rejection(
+                proposal.proof_id, proposal.actor, reasons, detail,
+                proposal.to_dict(),
+            )
+        except ConcurrencyError:
+            pass

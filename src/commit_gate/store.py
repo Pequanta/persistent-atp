@@ -76,6 +76,19 @@ class JournalStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rejections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proof_id TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reasons TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -223,6 +236,55 @@ class JournalStore:
             (proof_id,),
         ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
+
+    def record_rejection(
+        self,
+        proof_id: str,
+        actor: str,
+        reasons: Sequence[str],
+        detail: str,
+        payload_dict: dict[str, Any],
+    ) -> None:
+        """Append one refused proposal to the audit trail (Invariant 8/10).
+
+        The main chain records only accepted mutations; refusals land here
+        instead, INSERT-only by construction -- there is no update or delete
+        path, so a rejection stays auditable even though nothing was merged.
+        """
+        with self._write() as conn:
+            conn.execute(
+                """
+                INSERT INTO rejections (proof_id, actor, reasons, detail, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    proof_id,
+                    actor,
+                    canonical_json(list(reasons)).decode("utf-8"),
+                    detail,
+                    canonical_json(payload_dict).decode("utf-8"),
+                ),
+            )
+
+    def read_rejections(self, proof_id: str) -> Sequence[dict[str, Any]]:
+        """Every recorded refusal for a proof, oldest first."""
+        rows = self._conn.execute(
+            """
+            SELECT proof_id, actor, reasons, detail, created_at
+            FROM rejections WHERE proof_id = ? ORDER BY id ASC
+            """,
+            (proof_id,),
+        ).fetchall()
+        return [
+            {
+                "proof_id": row["proof_id"],
+                "actor": row["actor"],
+                "reasons": json.loads(row["reasons"]),
+                "detail": row["detail"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def read_chain(self, proof_id: str) -> Sequence[tuple[int, str, str]]:
         """Every `(revision, event_hash, prev_hash)` for a proof, in order."""
