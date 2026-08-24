@@ -28,8 +28,9 @@ missing request fields  invalid-request
 ``formal_search_resume`` hands the same goal back to the reasoner -- its
 Thompson-sampler state persists across calls, so a resumed run continues the
 search rather than restarting it blind. ``formal_replay`` delegates to an
-injected verdict function; independent Lean replay of certificates remains
-Phase 1 scope.
+injected verdict function; :mod:`mathproof.replay` provides the real one
+(``lean_replay_fn`` over Pantograph), while the default remains the Phase 0
+stub so test suites stay deterministic without a Lean backend.
 """
 
 from __future__ import annotations
