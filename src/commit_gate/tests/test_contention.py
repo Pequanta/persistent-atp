@@ -178,11 +178,11 @@ class TestContendedLeases(ContentionCase):
 
         self.assertEqual(len(set(tokens)), self.THREADS)
         self.assertEqual(tokens, list(range(1, self.THREADS + 1)))
-        # The surviving row carries the highest token ever issued.
+        # The highest token ever issued is never reissued or forgotten.
         row = self.store()._conn.execute(
-            "SELECT fencing_token FROM leases WHERE proof_id = 'p1'"
+            "SELECT MAX(fencing_token) AS top FROM leases WHERE proof_id = 'p1'"
         ).fetchone()
-        self.assertEqual(row["fencing_token"], max(tokens))
+        self.assertEqual(row["top"], max(tokens))
 
     def test_superseded_token_of_the_same_lease_cannot_commit_and_is_journalled(self):
         """Invariant 10: the stale write is refused AND stays auditable."""
