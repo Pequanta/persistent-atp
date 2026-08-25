@@ -131,6 +131,57 @@ UNIVERSAL_WORKER_AUTHORITY = frozenset({"Attempt"})
 class may create the Attempt that closes its result."""
 
 
+FAVORABLE_CRITIC_VERDICTS = frozenset(
+    {AttemptStatus.SUPPORTED.value, AttemptStatus.CRITIC_ACCEPTED.value}
+)
+"""Critic attempt outcomes that can back a `provisional -> critic-accepted`
+promotion. A pending or refuted critique is not a verdict."""
+
+TRUSTED_WORKER_CLASSES = frozenset(
+    {
+        WorkerClass.COORDINATOR.value,
+        WorkerClass.MAINTENANCE.value,
+        WorkerClass.HUMAN.value,
+    }
+)
+"""Actors that may write any label: they operate the store, not one proof."""
+
+WORKER_CLASS_AUTHORITY: dict[str, frozenset[str]] = {
+    WorkerClass.FORMAL_ATP.value: frozenset(
+        {
+            "FormalState",
+            "TacticApplication",
+            "FormalRun",
+            "FormalCheckpoint",
+            "Certificate",
+            "Obstruction",
+            "Environment",
+        }
+    ),
+    WorkerClass.REPLAYER.value: frozenset({"LeanReplay", "Certificate"}),
+    WorkerClass.LLM_RESEARCH.value: frozenset(
+        {"Claim", "SpeculativeHypothesis", "ResearchState", "ResearchMove"}
+    ),
+    WorkerClass.CRITIC.value: frozenset({"Attempt", "Critique", "Claim"}),
+    WorkerClass.ALIGNMENT_REVIEWER.value: frozenset({"Alignment", "Artifact", "Claim"}),
+    WorkerClass.HYPERON.value: frozenset(
+        {"Claim", "SpeculativeHypothesis", "ResearchState", "ResearchMove"}
+    ),
+    WorkerClass.EXPERIMENT.value: frozenset({"Experiment"}),
+}
+"""The atom labels each worker class may create or overwrite.
+
+Issuing multi-class leases is unsafe without this: an explorer must not close
+formal states, and a critic must not invent declarations. A worker_class
+outside this table (and outside `TRUSTED_WORKER_CLASSES`) is unmanaged -- the
+scheduler never issues it a lease, so its proposals are not policed here.
+"""
+
+UNIVERSAL_WORKER_AUTHORITY = frozenset({"Attempt"})
+"""Provenance every worker journals about its own work: any schedulable
+class may create the Attempt that closes its result."""
+
+
 UNSCOPED_LABELS = frozenset({"Artifact"})
 """Labels that are content-addressed and therefore carry no proof scope."""
 
