@@ -8,6 +8,8 @@ working. Add new literals to `shared/vocab.py`, never here.
 from shared.vocab import (
     ANNOTATION_FIELDS,
     GATE_LABELS,
+    NON_KERNEL_TACTICS,
+    STANDARD_LEAN_AXIOMS,
     TERMINAL_EXECUTOR_FAILURES,
     AlignmentLifecycle,
     AlignmentVerdict,
@@ -50,5 +52,7 @@ __all__ = [
     "ANNOTATION_FIELDS",
     "GATE_LABELS",
     "TERMINAL_EXECUTOR_FAILURES",
+    "NON_KERNEL_TACTICS",
+    "STANDARD_LEAN_AXIOMS",
     "values",
 ]

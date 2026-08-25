@@ -12,7 +12,7 @@ rather than the first failure.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from .ops import UNSET, AddEdge, Op, RemoveEdge, SetField, UpsertNode
 from .proposal import Proposal
@@ -29,6 +29,7 @@ from .vocab import (
     DeclarationStatus,
     ExecutorResult,
     FormalStateStatus,
+    NON_KERNEL_TACTICS,
     ObstructionKind,
     ReplayStatus,
     ResearchMoveStatus,
@@ -408,6 +409,22 @@ def check_executor_result(proposal: Proposal) -> Iterator[Rejection]:
                 index,
             )
             continue
+
+        if str(fields.get("tactic_label", "")) in NON_KERNEL_TACTICS and (
+            result == ExecutorResult.LEAN_ACCEPTED.value
+            or fields.get("status") == TacticStatus.CLOSED.value
+            or tactic_id in closures
+        ):
+            # C6: kernel evidence cannot be claimed by relabelling. The
+            # executor_result field is exactly what an untrusted producer
+            # controls, so the tactic label decides on its own.
+            yield Rejection(
+                Reason.NON_KERNEL_CLOSURE,
+                f"tactic {tactic_id!r} carries non-kernel label "
+                f"{fields.get('tactic_label')!r} and cannot claim kernel "
+                "acceptance or close a state",
+                index,
+            )
 
         if result in TERMINAL_FAILURE_VALUES:
             if fields.get("status") == TacticStatus.CLOSED.value:

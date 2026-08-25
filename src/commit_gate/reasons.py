@@ -36,6 +36,7 @@ class Reason(StrEnum):
     ORPHAN_CLOSURE_EDGE = "orphan-closure-edge"
 
     HEURISTIC_CLOSURE_ATTEMPT = "heuristic-closure-attempt"
+    NON_KERNEL_CLOSURE = "non-kernel-closure"
 
     UNKNOWN_NODE = "unknown-node"
     UNKNOWN_EDGE = "unknown-edge"
