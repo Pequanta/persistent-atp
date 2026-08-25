@@ -25,7 +25,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Iterable, Mapping
 
-from commit_gate.vocab import TERMINAL_EXECUTOR_FAILURES
+from commit_gate.vocab import (
+    NON_KERNEL_TACTICS,
+    TERMINAL_EXECUTOR_FAILURES,
+    ExecutorResult,
+)
 
 __all__ = [
     "SoundnessReason",
@@ -54,6 +58,7 @@ class SoundnessReason(StrEnum):
     EXECUTOR_FAILURE_AS_SUCCESS = "executor-failure-as-success"
     CLOSURE_WITHOUT_ZERO_GOALS = "closure-without-zero-goals"
     HEURISTIC_CLOSURE_ATTEMPT = "heuristic-closure-attempt"
+    NON_KERNEL_CLOSURE = "non-kernel-closure"
     SCORE_AS_TRUTH = "score-as-truth"
 
     MISSING_ENVIRONMENT_HASH = "missing-environment-hash"
@@ -174,6 +179,24 @@ def _check_tactic_edges(result: Mapping[str, Any]) -> Iterable[tuple[SoundnessVi
                     SoundnessReason.UNKNOWN_CHILD_STATE,
                     f"tactic {tactic_id!r} requires child state(s) {unknown} "
                     "that the result does not report",
+                    pointer,
+                ),
+                edge,
+            )
+            continue
+
+        if str(edge.get("tactic_label", "")) in NON_KERNEL_TACTICS and (
+            edge.get("executor_result") == str(ExecutorResult.LEAN_ACCEPTED)
+        ):
+            # C6: a branch scored shut by a heuristic is not kernel evidence,
+            # whatever executor_result claims. An honestly-labelled fallback
+            # edge (empty-output) passes here; closure rules catch its targets.
+            yield (
+                SoundnessViolation(
+                    SoundnessReason.NON_KERNEL_CLOSURE,
+                    f"tactic {tactic_id!r} carries non-kernel label "
+                    f"{edge.get('tactic_label')!r}; its result cannot be "
+                    "read as Lean acceptance",
                     pointer,
                 ),
                 edge,

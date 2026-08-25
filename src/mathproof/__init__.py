@@ -31,6 +31,7 @@ from .ids import (
     parse_local_id,
 )
 from .maths_ai_atp import MathsAIFormalATP
+from .replay import lean_replay_fn, pantograph_driver_factory, scan_for_sorry
 from .soundness import (
     SoundnessReason,
     SoundnessViolation,
@@ -59,6 +60,10 @@ __all__ = [
     "build_tactic_edge",
     "missing_request_fields",
     "stub_replay",
+    # replay
+    "lean_replay_fn",
+    "pantograph_driver_factory",
+    "scan_for_sorry",
     # soundness
     "SoundnessReason",
     "SoundnessViolation",

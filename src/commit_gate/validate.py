@@ -12,7 +12,7 @@ rather than the first failure.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from .ops import UNSET, AddEdge, Op, RemoveEdge, SetField, UpsertNode
 from .proposal import Proposal
@@ -29,6 +29,7 @@ from .vocab import (
     DeclarationStatus,
     ExecutorResult,
     FormalStateStatus,
+    NON_KERNEL_TACTICS,
     ObstructionKind,
     ReplayStatus,
     RunDisposition,
@@ -49,6 +50,9 @@ __all__ = [
     "check_status_transitions",
     "check_immutability",
     "check_stagnation_obstruction",
+    "check_claim_replay_evidence",
+    "check_claim_alignment",
+    "check_environment_binding",
 ]
 
 ENUM_FIELDS: dict[tuple[str, str], type] = {
@@ -72,6 +76,19 @@ CLOSED_STATE_VALUES = frozenset(
     {FormalStateStatus.FORMALLY_CLOSED.value, FormalStateStatus.LEAN_VERIFIED.value}
 )
 TERMINAL_FAILURE_VALUES = frozenset(m.value for m in TERMINAL_EXECUTOR_FAILURES)
+
+CLAIM_PROMOTION_TARGETS = frozenset(
+    {
+        ClaimStatus.CRITIC_ACCEPTED.value,
+        ClaimStatus.FORMALLY_CLOSED.value,
+        ClaimStatus.LEAN_VERIFIED.value,
+    }
+)
+"""Claim statuses that assert the claim is established.
+
+Reaching any of them is a promotion: it publishes the claim as usable
+knowledge, so reviewed, aligned statement agreement is required first.
+"""
 
 UNSCOPED_LABELS = frozenset({"Artifact"})
 """Labels that are content-addressed and therefore carry no proof scope."""
@@ -129,6 +146,9 @@ def validate_proposal(proposal: Proposal, view: ReadView | None = None) -> list[
         findings.extend(check_status_transitions(proposal, view))
         findings.extend(check_immutability(proposal, view))
         findings.extend(check_stagnation_obstruction(proposal, view))
+        findings.extend(check_claim_replay_evidence(proposal, view))
+        findings.extend(check_claim_alignment(proposal, view))
+        findings.extend(check_environment_binding(proposal, view))
 
     return findings
 
@@ -323,6 +343,22 @@ def check_executor_result(proposal: Proposal) -> Iterator[Rejection]:
                 index,
             )
             continue
+
+        if str(fields.get("tactic_label", "")) in NON_KERNEL_TACTICS and (
+            result == ExecutorResult.LEAN_ACCEPTED.value
+            or fields.get("status") == TacticStatus.CLOSED.value
+            or tactic_id in closures
+        ):
+            # C6: kernel evidence cannot be claimed by relabelling. The
+            # executor_result field is exactly what an untrusted producer
+            # controls, so the tactic label decides on its own.
+            yield Rejection(
+                Reason.NON_KERNEL_CLOSURE,
+                f"tactic {tactic_id!r} carries non-kernel label "
+                f"{fields.get('tactic_label')!r} and cannot claim kernel "
+                "acceptance or close a state",
+                index,
+            )
 
         if result in TERMINAL_FAILURE_VALUES:
             if fields.get("status") == TacticStatus.CLOSED.value:
@@ -563,5 +599,225 @@ def check_stagnation_obstruction(proposal: Proposal, view: ReadView) -> Iterator
             yield Rejection(
                 Reason.STAGNATION_WITHOUT_OBSTRUCTION,
                 f"FormalRun {op.node_id!r} marked stagnated without a RAISED_OBSTRUCTION edge",
+                index,
+            )
+
+
+def _created_fields(proposal: Proposal) -> dict[str, Any]:
+    """Fields of every node this proposal creates, by id."""
+    return {
+        op.node_id: dict(op.fields) for op in proposal.ops if isinstance(op, UpsertNode)
+    }
+
+
+def _proposed_edges(proposal: Proposal, rel_type: str) -> list[tuple[str, str]]:
+    """(src, dst) of every `rel_type` edge this proposal adds."""
+    return [
+        (op.src_id, op.dst_id)
+        for op in proposal.ops
+        if isinstance(op, AddEdge) and op.rel_type == rel_type
+    ]
+
+
+def _fields_of(
+    node_id: str, created: dict[str, Any], view: ReadView
+) -> Mapping[str, Any] | None:
+    """A node's fields whether it is created here or already committed."""
+    if node_id in created:
+        return created[node_id]
+    record = view.node(node_id)
+    return record.fields if record is not None else None
+
+
+def check_claim_replay_evidence(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A claim reaches lean-verified only over an independent verified replay.
+
+    The promotion must be backed by a full evidence chain — PROVED_BY to a
+    certificate whose REPLAYED_BY edge names a LeanReplay reporting
+    status=verified with sorry_detected=false. A replay that does not state
+    the flag is not evidence. A replay run by the certificate's producer or
+    by this proposal's actor is self-certification: it never counts as
+    evidence, and is reported on its own so the worker sees why.
+
+    The finding itself refuses the proposal, so a self-certified replay
+    poisons every promotion that can still see it — even one carrying other
+    valid replays. Remediation is a retraction of the offending REPLAYED_BY
+    edge in its own committed event; the chain then walks clean.
+    """
+    created = _created_fields(proposal)
+    proved = _proposed_edges(proposal, "PROVED_BY")
+    replayed = _proposed_edges(proposal, "REPLAYED_BY")
+
+    for index, op in enumerate(proposal.ops):
+        if not (
+            isinstance(op, SetField)
+            and op.label == "Claim"
+            and op.field == "status"
+            and op.value == ClaimStatus.LEAN_VERIFIED.value
+        ):
+            continue
+
+        claim_id = op.node_id
+        cert_ids = [edge.dst_id for edge in view.edges_from(claim_id, "PROVED_BY")]
+        cert_ids += [dst for src, dst in proved if src == claim_id]
+
+        verified = False
+        seen_replays: set[str] = set()
+        for cert_id in cert_ids:
+            cert_fields = _fields_of(cert_id, created, view)
+            producer_actor = cert_fields.get("actor") if cert_fields else None
+
+            replay_ids = [
+                edge.dst_id for edge in view.edges_from(cert_id, "REPLAYED_BY")
+            ]
+            replay_ids += [dst for src, dst in replayed if src == cert_id]
+            for replay_id in replay_ids:
+                if replay_id in seen_replays:
+                    continue
+                seen_replays.add(replay_id)
+
+                fields = _fields_of(replay_id, created, view)
+                if fields is None:
+                    continue
+                actor = fields.get("actor")
+                if actor is not None and actor in (producer_actor, proposal.actor):
+                    yield Rejection(
+                        Reason.SELF_CERTIFICATION,
+                        f"replay {replay_id!r} was run by {actor!r}, who also "
+                        f"produced the certificate or submits this proposal",
+                        index,
+                    )
+                    continue
+                if (
+                    fields.get("status") == ReplayStatus.VERIFIED.value
+                    and fields.get("sorry_detected") is False
+                ):
+                    verified = True
+
+        if not verified:
+            yield Rejection(
+                Reason.PROMOTION_WITHOUT_REPLAY,
+                f"claim {claim_id!r} has no independent replay with "
+                "status=verified and sorry_detected=false",
+                index,
+            )
+
+
+def check_claim_alignment(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """An upward claim promotion requires reviewed, aligned statement agreement.
+
+    critic-accepted, formally-closed and lean-verified all publish the claim
+    as established, so an ALIGNS_CLAIM edge must reach an Alignment whose
+    lifecycle is reviewed and whose verdict is aligned. Draft, unreviewed,
+    superseded or disagreeing alignments do not qualify.
+    """
+    created = _created_fields(proposal)
+    aligns = _proposed_edges(proposal, "ALIGNS_CLAIM")
+
+    for index, op in enumerate(proposal.ops):
+        if not (
+            isinstance(op, SetField)
+            and op.label == "Claim"
+            and op.field == "status"
+            and op.value in CLAIM_PROMOTION_TARGETS
+        ):
+            continue
+
+        claim_id = op.node_id
+        alignment_ids = [
+            edge.src_id for edge in view.edges_to(claim_id, "ALIGNS_CLAIM")
+        ]
+        alignment_ids += [src for src, dst in aligns if dst == claim_id]
+
+        aligned = any(
+            (fields := _fields_of(alignment_id, created, view)) is not None
+            and fields.get("lifecycle") == AlignmentLifecycle.REVIEWED.value
+            and fields.get("verdict") == AlignmentVerdict.ALIGNED.value
+            for alignment_id in set(alignment_ids)
+        )
+        if not aligned:
+            yield Rejection(
+                Reason.PROMOTION_WITHOUT_ALIGNMENT,
+                f"claim {claim_id!r} promotes to {op.value!r} without an "
+                "alignment that is reviewed and aligned",
+                index,
+            )
+
+
+CERTIFICATE_VALID_STATUSES = frozenset(
+    {CertificateStatus.CANDIDATE.value, CertificateStatus.REPLAY_ACCEPTED.value}
+)
+"""Certificate statuses that assert the artifact is usable evidence.
+
+Committing a certificate under one of them binds it to the declaration's
+pinned toolchain; under any other environment hash it may only enter the
+graph as `stale`.
+"""
+
+
+def check_environment_binding(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A certificate is only valid under its declaration's pinned environment.
+
+    C4: after a mathlib bump, a re-run produces a different
+    environment_hash. That second certificate is not silently accepted as
+    fresh evidence -- it may only be committed as `stale`. The binding is
+    read through the run that produced the certificate (PRODUCED_CERTIFICATE,
+    then SEARCHES to the declaration, then PINNED_ENVIRONMENT to an
+    Environment); where no pin exists there is nothing to enforce and the
+    check stays silent.
+    """
+    created = _created_fields(proposal)
+    produced = _proposed_edges(proposal, "PRODUCED_CERTIFICATE")
+    searches = _proposed_edges(proposal, "SEARCHES")
+    pinned = _proposed_edges(proposal, "PINNED_ENVIRONMENT")
+
+    def committed_env_hash(env_id: str) -> Any:
+        fields = _fields_of(env_id, created, view)
+        return fields.get("environment_hash") if fields else None
+
+    for index, op in enumerate(proposal.ops):
+        if isinstance(op, UpsertNode) and op.label == "Certificate":
+            cert_id, status = op.node_id, op.fields.get("status")
+            env_hash = op.fields.get("environment_hash")
+        elif (
+            isinstance(op, SetField)
+            and op.label == "Certificate"
+            and op.field == "status"
+        ):
+            cert_id = op.node_id
+            record = view.node(cert_id)
+            if record is None:
+                continue
+            status = op.value
+            env_hash = record.fields.get("environment_hash")
+        else:
+            continue
+
+        if status not in CERTIFICATE_VALID_STATUSES or not env_hash:
+            continue
+
+        run_ids = [edge.src_id for edge in view.edges_to(cert_id, "PRODUCED_CERTIFICATE")]
+        run_ids += [src for src, dst in produced if dst == cert_id]
+
+        pinned_hashes: set[Any] = set()
+        for run_id in run_ids:
+            decl_ids = [edge.dst_id for edge in view.edges_from(run_id, "SEARCHES")]
+            decl_ids += [dst for src, dst in searches if src == run_id]
+            for decl_id in decl_ids:
+                env_ids = [
+                    edge.dst_id for edge in view.edges_from(decl_id, "PINNED_ENVIRONMENT")
+                ]
+                env_ids += [dst for src, dst in pinned if src == decl_id]
+                for env_id in env_ids:
+                    h = committed_env_hash(env_id)
+                    if h is not None:
+                        pinned_hashes.add(h)
+
+        if pinned_hashes and env_hash not in pinned_hashes:
+            yield Rejection(
+                Reason.ENVIRONMENT_DRIFT,
+                f"certificate {cert_id!r} was produced under {env_hash!r} but "
+                f"{cert_id!r}'s declaration pins {sorted(map(str, pinned_hashes))}; "
+                "commit it as stale instead",
                 index,
             )
