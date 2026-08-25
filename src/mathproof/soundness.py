@@ -35,6 +35,8 @@ __all__ = [
     "SoundnessReason",
     "SoundnessViolation",
     "validate_formal_search_result",
+    "check_certificate_replay_binding",
+    "check_environment_staleness",
     "violation_counts",
 ]
 
@@ -62,6 +64,11 @@ class SoundnessReason(StrEnum):
     MISSING_ENVIRONMENT_HASH = "missing-environment-hash"
     MALFORMED_ENVIRONMENT_HASH = "malformed-environment-hash"
     OBSTRUCTION_ENVIRONMENT_MISMATCH = "obstruction-environment-mismatch"
+
+    CERTIFICATE_REQUIRED = "certificate-required"
+    PROMOTION_WITHOUT_REPLAY = "promotion-without-replay"
+    REPLAY_ENVIRONMENT_MISMATCH = "replay-environment-mismatch"
+    ENVIRONMENT_STALE = "environment-stale"
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,4 +273,95 @@ def validate_formal_search_result(
             findings.append(violation)
 
     findings.extend(_check_closure_and_scores(result))
+    findings.extend(check_certificate_replay_binding(result))
     return tuple(findings)
+
+
+def check_certificate_replay_binding(
+    result: Mapping[str, Any],
+) -> tuple[SoundnessViolation, ...]:
+    """The replay contract (6.11, Invariant 4), checked structurally.
+
+    A certificate only becomes accepted/rejected through an attached
+    ``replay_result`` produced by the independent replayer -- never by the
+    searching adapter's own word. A ``proved-pending-replay`` run must in
+    fact carry a candidate certificate.
+    """
+    findings: list[SoundnessViolation] = []
+    certificate = result.get("certificate")
+
+    if result.get("disposition") == "proved-pending-replay" and not certificate:
+        findings.append(
+            SoundnessViolation(
+                SoundnessReason.CERTIFICATE_REQUIRED,
+                "disposition proved-pending-replay carries no certificate",
+                "certificate",
+            )
+        )
+    if not certificate:
+        return tuple(findings)
+
+    status = certificate.get("status")
+    if status in ("replay-accepted", "replay-rejected"):
+        replay = certificate.get("replay_result")
+        if not replay:
+            findings.append(
+                SoundnessViolation(
+                    SoundnessReason.PROMOTION_WITHOUT_REPLAY,
+                    f"certificate status {status!r} without an attached "
+                    "replay_result; only the independent replayer may set it",
+                    "certificate.status",
+                )
+            )
+        elif replay.get("status") != ("replay-accepted" if status == "replay-accepted" else "rejected"):
+            findings.append(
+                SoundnessViolation(
+                    SoundnessReason.PROMOTION_WITHOUT_REPLAY,
+                    f"certificate status {status!r} contradicts its replay_result "
+                    f"{replay.get('status')!r}",
+                    "certificate.replay_result",
+                )
+            )
+        else:
+            replay_env = replay.get("environment_hash")
+            if replay_env is not None and replay_env != result.get("environment_hash"):
+                findings.append(
+                    SoundnessViolation(
+                        SoundnessReason.REPLAY_ENVIRONMENT_MISMATCH,
+                        f"replayed under {replay_env!r} but the run searched "
+                        f"under {result.get('environment_hash')!r}",
+                        "certificate.replay_result.environment_hash",
+                    )
+                )
+
+    return tuple(findings)
+
+
+def check_environment_staleness(
+    prior_certificates: Iterable[Mapping[str, Any]],
+    candidate_certificate: Mapping[str, Any],
+) -> SoundnessViolation | None:
+    """Environment drift (6.12, 11.4): a changed toolchain stales the certificate.
+
+    Compares `candidate_certificate` against every prior certificate for the
+    same declaration. If any prior was produced under a different
+    ``environment_hash``, the candidate cannot be accepted as current: it is
+    reported stale rather than valid. Returns None when no drift is detected.
+    """
+    declaration = candidate_certificate.get("declaration_id")
+    candidate_env = candidate_certificate.get("environment_hash")
+
+    for index, prior in enumerate(prior_certificates):
+        if declaration is not None and prior.get("declaration_id") != declaration:
+            continue
+        prior_env = prior.get("environment_hash")
+        if prior_env is not None and prior_env != candidate_env:
+            return SoundnessViolation(
+                SoundnessReason.ENVIRONMENT_STALE,
+                f"certificate {candidate_certificate.get('artifact_hash', '?')!r} "
+                f"is stale: prior certificate {index} for {declaration!r} was "
+                f"produced under environment {prior_env!r}, candidate under "
+                f"{candidate_env!r}",
+                "environment_hash",
+            )
+    return None

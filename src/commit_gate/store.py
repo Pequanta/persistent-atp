@@ -79,13 +79,12 @@ class JournalStore:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS rejections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 proof_id TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                reasons TEXT NOT NULL,
+                reason TEXT NOT NULL,
                 detail TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                payload TEXT,
+                committed_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -240,48 +239,49 @@ class JournalStore:
     def record_rejection(
         self,
         proof_id: str,
-        actor: str,
-        reasons: Sequence[str],
+        reason: str,
         detail: str,
-        payload_dict: dict[str, Any],
-    ) -> None:
-        """Append one refused proposal to the audit trail (Invariant 8/10).
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        """Journal one refused proposal as an auditable event (Invariants 8, 10).
 
-        The main chain records only accepted mutations; refusals land here
-        instead, INSERT-only by construction -- there is no update or delete
-        path, so a rejection stays auditable even though nothing was merged.
+        Rejections never enter the hash chain -- the chain records committed
+        history only -- but late or stale work must remain visible to audit
+        rather than vanishing at the door. Returns the rejection's sequence
+        number. Raises `ConcurrencyError` if the write lock cannot be taken;
+        the gate treats recording as best-effort for that case alone.
         """
         with self._write() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
-                INSERT INTO rejections (proof_id, actor, reasons, detail, payload)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO rejections (proof_id, reason, detail, payload)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     proof_id,
-                    actor,
-                    canonical_json(list(reasons)).decode("utf-8"),
+                    str(reason),
                     detail,
-                    canonical_json(payload_dict).decode("utf-8"),
+                    canonical_json(payload).decode("utf-8") if payload else None,
                 ),
             )
+        return cursor.lastrowid
 
     def read_rejections(self, proof_id: str) -> Sequence[dict[str, Any]]:
-        """Every recorded refusal for a proof, oldest first."""
+        """Every recorded rejection for a proof, oldest first."""
         rows = self._conn.execute(
             """
-            SELECT proof_id, actor, reasons, detail, created_at
-            FROM rejections WHERE proof_id = ? ORDER BY id ASC
+            SELECT seq, reason, detail, payload, committed_at
+            FROM rejections WHERE proof_id = ? ORDER BY seq ASC
             """,
             (proof_id,),
         ).fetchall()
         return [
             {
-                "proof_id": row["proof_id"],
-                "actor": row["actor"],
-                "reasons": json.loads(row["reasons"]),
+                "seq": row["seq"],
+                "reason": row["reason"],
                 "detail": row["detail"],
-                "created_at": row["created_at"],
+                "payload": json.loads(row["payload"]) if row["payload"] else None,
+                "committed_at": row["committed_at"],
             }
             for row in rows
         ]

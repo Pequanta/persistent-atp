@@ -60,15 +60,14 @@ class CommitGate:
         """Validate `proposal` and, if it holds, append it to the journal.
 
         A lost race is reported as a rejection rather than raised: the proposer
-        gets a code it can act on, and nothing has been written. Every refusal
-        -- validation failure or concurrency loss -- is recorded on the
-        store's append-only rejection trail first: nothing merged is not the
-        same as nothing happened.
+        gets a code it can act on, and nothing has been written. Refused
+        proposals are recorded in the rejection audit log (best-effort: if the
+        journal is too busy even for that, the rejection still reaches the
+        proposer -- only the audit copy is lost).
         """
         rejections = self.validate(proposal)
         if rejections:
-            self._record(proposal, [str(r.reason) for r in rejections],
-                         "; ".join(r.detail for r in rejections))
+            self._audit(proposal, rejections)
             return CommitResult(
                 accepted=False,
                 rejections=tuple(rejections),
@@ -79,7 +78,9 @@ class CommitGate:
         try:
             revision, event_hash = self._store.append(proposal.to_dict())
         except ConcurrencyError as exc:
-            self._record(proposal, [str(exc.reason)], exc.detail)
+            self._audit(
+                proposal, (Rejection(exc.reason, exc.detail),)
+            )
             return CommitResult(
                 accepted=False,
                 rejections=(Rejection(exc.reason, exc.detail),),
@@ -94,11 +95,15 @@ class CommitGate:
             revision=revision,
         )
 
-    def _record(self, proposal: Proposal, reasons: list[str], detail: str) -> None:
-        try:
-            self._store.record_rejection(
-                proposal.proof_id, proposal.actor, reasons, detail,
-                proposal.to_dict(),
-            )
-        except ConcurrencyError:
-            pass
+    def _audit(self, proposal: Proposal, rejections) -> None:
+        """Copy refused proposals into the rejection log; never blocks the answer."""
+        for rejection in rejections:
+            try:
+                self._store.record_rejection(
+                    proposal.proof_id,
+                    str(rejection.reason),
+                    rejection.detail,
+                    payload=proposal.to_dict(),
+                )
+            except ConcurrencyError:
+                return

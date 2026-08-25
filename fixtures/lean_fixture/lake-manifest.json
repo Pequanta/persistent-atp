@@ -1,0 +1,9 @@
+{
+  "packages": [
+    {
+      "type": "path",
+      "name": "mathlib",
+      "srcDir": "."
+    }
+  ]
+}
