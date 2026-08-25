@@ -1,10 +1,10 @@
-"""One scheduling cycle: lease -> dispatch -> propose -> commit (Section 10.2).
+"""One scheduling cycle: lease -> dispatch -> propose -> commit.
 
 `run_cycle` is the thin outer loop of the reference algorithm. It owns no
 state of its own: leases come from the scheduler, results come from adapters
 or the dispatcher seam, and every write goes through the commit gate as an
 inert proposal. An empty frontier is not a failure -- it is the coordinator's
-cue to audit or expand (Section 10.4).
+cue to audit or expand.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def _route_after_commit(
     proof_id: str,
     maintenance: Callable[[Any, CommitResult], None] | None = None,
 ) -> RoutingDecision | None:
-    """Evaluate the Section 8.7 trigger table over the run just committed.
+    """Evaluate the adaptive routing trigger table over the run just committed.
 
     A bridge-lemma convergence fires a follow-up research-move proposal
     through the gate; every other decision rides the digest back to the

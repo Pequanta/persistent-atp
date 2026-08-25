@@ -1,4 +1,4 @@
-"""3.2: worker-class authority at the gate.
+"""Worker-class authority at the gate.
 
 The scheduler issues leases per worker class; a class that could write atom
 types outside its remit would make multi-class dispatch unsafe. These tests

@@ -1,9 +1,9 @@
 """The global scheduler: frontier correctness, scoring, auditability.
 
-Covers the sign-off tests that need no live dispatch: the eligible set
-(Section 3), exclusion rules, config-driven selection, score-snapshot
-auditability (Section 8.4), statistics feedback, the empty-frontier terminal
-state, and the Invariant 7/9 boundary -- scheduling never touches status.
+Covers what needs no live dispatch: the eligible set, exclusion rules,
+config-driven selection, score-snapshot auditability, statistics feedback, the
+empty-frontier terminal state, and the authority boundary -- scheduling never
+touches status.
 """
 
 import unittest
@@ -198,7 +198,7 @@ class TestStatistics(SchedulerCase):
         self.assertAlmostEqual(vector["repeated_failure_risk"], 2 / 3)
 
     def test_a_burned_category_loses_the_next_selection(self):
-        """Section 9.6: the frontier ordering itself must move."""
+        """A burned category must lose its place in the next selection."""
         weights = zeroed(repeated_failure_risk=-1.0)
         statistics = SchedulerStatistics()
         for _ in range(4):
@@ -234,7 +234,7 @@ class TestStatistics(SchedulerCase):
 
 
 class TestConcurrentLeasing(SchedulerCase):
-    """Section 9.2 as an integration test: the real scheduler code, racing."""
+    """Simultaneous lease_next against the real scheduler code, racing."""
 
     THREADS = 6
 
@@ -277,7 +277,7 @@ class TestConcurrentLeasing(SchedulerCase):
         self.assertEqual(set(moves), ELIGIBLE)
 
     def test_a_superseded_dispatch_falls_through_to_the_next_candidate(self):
-        """The Section 2.2 failure mode, forced serially for determinism."""
+        """The double-dispatch failure mode, forced serially for determinism."""
         first = self.scheduler().lease_next("p1", "coordinator")
         second = self.scheduler().lease_next("p1", "coordinator")
         # No overlap even though both schedulers scored the same frontier.
@@ -287,7 +287,7 @@ class TestConcurrentLeasing(SchedulerCase):
 
 class TestInvariantBoundary(SchedulerCase):
     def test_scheduling_writes_no_committed_state(self):
-        """Invariant 7/9 negative test: only leases move, the graph stands still."""
+        """Negative test: only leases move, the graph stands still."""
         before = {
             node_id: (record.label, dict(record.fields))
             for node_id, record in self.view.nodes.items()

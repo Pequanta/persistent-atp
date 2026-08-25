@@ -83,7 +83,7 @@ FAVORABLE_CRITIC_VERDICTS = frozenset(
     {AttemptStatus.SUPPORTED.value, AttemptStatus.CRITIC_ACCEPTED.value}
 )
 """Critic attempt outcomes that can back a `provisional -> critic-accepted`
-promotion (10.6). A pending or refuted critique is not a verdict."""
+promotion. A pending or refuted critique is not a verdict."""
 
 TRUSTED_WORKER_CLASSES = frozenset(
     {
@@ -117,7 +117,7 @@ WORKER_CLASS_AUTHORITY: dict[str, frozenset[str]] = {
     ),
     WorkerClass.EXPERIMENT.value: frozenset({"Experiment"}),
 }
-"""The atom labels each worker class may create or overwrite (3.2).
+"""The atom labels each worker class may create or overwrite.
 
 Issuing multi-class leases is unsafe without this: an explorer must not close
 formal states, and a critic must not invent declarations. A worker_class
@@ -126,8 +126,8 @@ scheduler never issues it a lease, so its proposals are not policed here.
 """
 
 UNIVERSAL_WORKER_AUTHORITY = frozenset({"Attempt"})
-"""Provenance every worker journals about its own work (11.2): any
-schedulable class may create the Attempt that closes its result."""
+"""Provenance every worker journals about its own work: any schedulable
+class may create the Attempt that closes its result."""
 
 
 UNSCOPED_LABELS = frozenset({"Artifact"})
@@ -285,7 +285,7 @@ def _identities(op: Op) -> Iterator[tuple[str, Any]]:
 
 
 def check_worker_authority(proposal: Proposal) -> Iterator[Rejection]:
-    """3.2: a worker class writes only the atom types it has authority over.
+    """A worker class writes only the atom types it has authority over.
 
     Edge ops are not checked here -- their endpoints are label-checked
     elsewhere, and creating an edge between two existing nodes changes no
@@ -653,7 +653,7 @@ def check_stagnation_obstruction(proposal: Proposal, view: ReadView) -> Iterator
 
 
 def check_critic_gating(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
-    """10.6: `provisional -> critic-accepted` requires critic-verdict evidence.
+    """`provisional -> critic-accepted` requires critic-verdict evidence.
 
     The promotion must carry, in the same proposal or already committed, a
     `REVIEWS_CLAIM` edge from an `Attempt` whose worker_class is `critic` and

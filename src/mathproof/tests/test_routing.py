@@ -1,4 +1,4 @@
-"""Adaptive routing: trigger fixtures fire the right action (Sections 5, 8.7).
+"""Adaptive routing: trigger fixtures fire the right action.
 
 Each rule gets a fixture built from exactly what ATP commits -- checkpoints,
 dead-edge failure families, typed obstructions -- because the scheduler reads

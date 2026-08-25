@@ -1,4 +1,4 @@
-"""Dispatch: turn a lease into worker output, and output into ops (Section 6).
+"""Dispatch: turn a lease into worker output, and output into ops.
 
 The dispatcher is a seam: `ScriptedDispatcher` serves tests and the Phase 3
 harness; real LLM/Hyperon workers implement the same `run(lease, context)`

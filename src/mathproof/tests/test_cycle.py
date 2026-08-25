@@ -1,4 +1,4 @@
-"""End-to-end cycles: lease -> dispatch -> proposal -> commit (Section 6).
+"""End-to-end cycles: lease -> dispatch -> proposal -> commit.
 
 Each test drives `run_cycle` against the real gate and journal, with scripted
 workers behind the dispatcher seam -- the Phase 3 harness shape. What must

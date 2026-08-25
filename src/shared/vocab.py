@@ -97,11 +97,11 @@ class StateKind(StrEnum):
 
 
 class ResearchStateStatus(StrEnum):
-    """Research state operational status (A.1).
+    """Research state operational status.
 
     The minimal lifecycle the global scheduler needs: a move whose parent
     state is ``superseded`` or ``refuted`` leaves the eligible frontier
-    (Section 3.4) until the taint is resolved.
+    til the taint is resolved.
     """
 
     OPEN = "open"
@@ -111,7 +111,7 @@ class ResearchStateStatus(StrEnum):
 
 
 class ResearchMoveStatus(StrEnum):
-    """Research move status: leasing plus pruning outcomes (A.1, 4.7).
+    """Research move status: leasing plus pruning outcomes.
 
     ``queued``/``open`` are the frontier statuses the scheduler leases from;
     ``leased`` marks an active dispatch; ``refuted``/``dominated``/

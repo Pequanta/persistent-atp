@@ -67,7 +67,7 @@
       ]
     },
     "verdict": {
-      "description": "Critic results (12.4): the reviewer's conclusion on the leased claim. Mirrors the favorable/unfavorable Attempt statuses.",
+      "description": "Critic results: the reviewer's conclusion on the leased claim. Mirrors the favorable/unfavorable Attempt statuses.",
       "enum": ["supported", "critic-accepted", "refuted", "retracted"]
     },
     "counterexample_artifact": {
@@ -77,7 +77,7 @@
     "parent_state_id": {
       "type": "string",
       "pattern": "^[^/]+/rs-[1-9][0-9]*$",
-      "description": "Explorer results (12.4): the research state a proposed move hangs from."
+      "description": "Explorer results: the research state a proposed move hangs from."
     },
     "move_detail": {
       "type": "string",

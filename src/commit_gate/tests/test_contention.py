@@ -1,4 +1,4 @@
-"""Hardening tests under genuine concurrency (scheduler prerequisite 1.1/1.3).
+"""Hardening tests under genuine concurrency.
 
 Every test runs real threads against separate `JournalStore` connections on one
 database file -- the shape contention takes in production. Sequential calls
@@ -185,7 +185,7 @@ class TestContendedLeases(ContentionCase):
         self.assertEqual(row["top"], max(tokens))
 
     def test_superseded_token_of_the_same_lease_cannot_commit_and_is_journalled(self):
-        """Invariant 10: the stale write is refused AND stays auditable."""
+        """The stale write is refused AND stays auditable."""
         writer = self.store()
         auditor = self.store()
         old_token = writer.acquire_lease("p1", "lease-a")

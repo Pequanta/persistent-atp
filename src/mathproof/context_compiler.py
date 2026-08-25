@@ -1,4 +1,4 @@
-"""Role-specific context packets (Section 9.3 / Context Compilation).
+"""Role-specific context packets (context compilation).
 
 Workers never see the whole workspace: the compiler projects committed state
 into the narrow packet a role needs, and stamps every packet with a manifest

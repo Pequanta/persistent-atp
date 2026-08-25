@@ -1,12 +1,12 @@
-"""The global scheduler: choose the next move, issue its lease (Section 8).
+"""The global scheduler: choose the next move, issue its lease.
 
-`GlobalScheduler.lease_next(proof_id, worker_class, ttl)` is `proof-lease-next`
-(Section 2): one call builds the eligible frontier from committed state,
+`GlobalScheduler.lease_next(proof_id, worker_class, ttl)` is
+`proof-lease-next`: one call builds the eligible frontier from committed state,
 scores it with a transparent weighted-sum policy, selects one move, and
 issues a per-move dispatch lease through the journal store -- expiry, mutual
 exclusion and fencing included.
 
-Invariants this module must never break (2.4 / 7 / 9):
+Rules this module must never break:
 
 * every score is advisory. The scheduler writes leases and score snapshots,
   never statuses; promotion stays the commit gate's job.
@@ -61,7 +61,7 @@ FEATURES = (
 )
 
 NEUTRAL_DEFAULTS: dict[str, float] = {
-    # Section 4.4: unpopulated features take midpoints or category priors,
+    # Unpopulated features take midpoints or category priors,
     # never silent zeros -- a zero is an assertion, not a default.
     "dependency_centrality": 0.5,
     "expected_theorem_impact": 0.5,
@@ -94,7 +94,7 @@ class Candidate:
 
 @dataclass(frozen=True, slots=True)
 class Lease:
-    """What a dispatched worker receives (Section 2.3)."""
+    """What a dispatched worker receives."""
 
     lease_id: str
     proof_id: str
@@ -143,7 +143,7 @@ class Lease:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerPolicy:
-    """Transparent best-first weights over the Section 8.2 feature vector.
+    """Transparent best-first weights over the scheduling feature vector.
 
     Configuration values, not code: pass different weights to change
     scheduling behaviour without touching the scheduler.
@@ -185,7 +185,7 @@ class SchedulerStatistics:
         """Share of recorded attempts in this category that failed.
 
         Neutral midpoint while there is no history: zero would claim a clean
-        record the system has not earned (Section 4.4).
+        record the system has not earned.
         """
         attempted = self.attempts(category)
         if attempted == 0:
@@ -240,8 +240,8 @@ class GlobalScheduler:
         Scoring runs over a committed-state snapshot; the grant itself is one
         journal transaction (`dispatch_lease`), which re-checks move coverage
         under the lock. Two racing schedulers therefore never double-dispatch
-        a move or share a fencing token -- Section 2.2's failure mode cannot
-        occur; the loser falls through to its next candidate.
+        a move or share a fencing token; the loser falls through to its next
+        candidate.
         """
         with self._lease_lock:
             active_moves = {
@@ -279,7 +279,7 @@ class GlobalScheduler:
         """Mark a dispatched lease finished (its token dies either way)."""
         return self._store.release_lease(proof_id, lease_id)
 
-    # -- frontier construction (Section 3) ----------------------------------
+    # -- frontier construction ----------------------------------------------
 
     def build_frontier(self, proof_id: str) -> list[Candidate]:
         """Every committable object eligible for dispatch right now."""
@@ -292,7 +292,7 @@ class GlobalScheduler:
         }
         candidates: list[Candidate] = []
 
-        # Research moves under a live parent state (3.1, 3.4).
+        # Research moves under a live parent state.
         for state_id, state in nodes.items():
             if state.label != "ResearchState":
                 continue
@@ -324,7 +324,7 @@ class GlobalScheduler:
                     )
 
         for node_id, record in nodes.items():
-            # Formal targets: aligned declarations and resumable runs (3.2).
+            # Formal targets: aligned declarations and resumable runs.
             if record.label == "FormalDeclaration" and record.fields.get(
                 "status"
             ) in (DeclarationStatus.ALIGNED.value, DeclarationStatus.SEARCHING.value):
@@ -359,7 +359,7 @@ class GlobalScheduler:
                         )
                     )
 
-            # Critic tasks: provisional claims with no favorable verdict (3.3).
+            # Critic tasks: provisional claims with no favorable verdict.
             elif record.label == "Claim":
                 if record.fields.get("status") != ClaimStatus.PROVISIONAL.value:
                     continue
@@ -385,7 +385,7 @@ class GlobalScheduler:
     def _feature_vector(
         self, candidate: Candidate, requested_worker_class: str
     ) -> dict[str, float]:
-        """The complete Section 8.2 feature vector for one candidate.
+        """The complete scheduling feature vector for one candidate.
 
         Neutral defaults form the base layer; category-specific features
         override them; statistics and worker availability come last.
@@ -401,7 +401,7 @@ class GlobalScheduler:
         )
         return features
 
-    # -- statistics feedback (Section 6.3) -----------------------------------
+    # -- statistics feedback ---------------------------------------------------
 
     def update_statistics(self, commit: CommitResult, category: str) -> None:
         """Close the loop: commit outcomes shape future frontier scores."""

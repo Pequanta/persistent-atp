@@ -217,7 +217,7 @@ class JournalStore:
     #
     # Two issuance shapes share one monotonic token counter per proof:
     #
-    #   acquire_lease  -- the proof-level write lock (8.4): issuing it
+    #   acquire_lease  -- the proof-level write lock: issuing it
     #     supersedes every other active lease on the proof. Coordinator-grade
     #     structural work holds this; scheduler-dispatched workers then lose
     #     their leases and must re-lease, which is the point of an exclusive
@@ -298,7 +298,7 @@ class JournalStore:
         ttl_seconds: float = 600.0,
         score_snapshot: dict[str, Any] | None = None,
     ) -> LeaseRow:
-        """Issue one scheduler dispatch lease (Section 2).
+        """Issue one scheduler dispatch lease.
 
         One indivisible operation inside the journal write lock: lapse any
         due leases on this proof, supersede any active lease still held
@@ -405,8 +405,8 @@ class JournalStore:
     ) -> LeaseRow | None:
         """Grant the highest-ranked move that is still free -- atomically.
 
-        This is Section 2.2's indivisibility contract, enforced where it can
-        actually hold: inside one journal write transaction the store lapses
+        Granting is indivisible, enforced where it can actually
+        hold: inside one journal write transaction the store lapses
         due leases, walks the caller-ranked candidates, skips every move an
         active lease already covers, and issues the first survivor its own
         fencing token and allocator identity. Two racing schedulers therefore
@@ -688,7 +688,7 @@ class JournalStore:
             if exc.reason is Reason.LEASE_NOT_HELD:
                 # The refused append rolled back, taking the lazy lapse of the
                 # dead lease with it. Re-lapse in its own transaction so the
-                # expiry stays audited (Invariant 10).
+                # expiry stays audited.
                 with self._write() as conn:
                     self._expire_due_leases(conn, proof_id)
             raise

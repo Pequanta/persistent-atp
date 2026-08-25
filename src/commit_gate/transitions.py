@@ -109,7 +109,7 @@ STATUS_TRANSITIONS: Final[dict[tuple[str, str], dict[str, frozenset[str]]]] = {
         "exhausted": frozenset(),
         "dead": frozenset(),
     },
-    # The research layer's minimal lifecycle (A.1). A research move whose
+    # The research layer's minimal lifecycle. A research move whose
     # parent state was superseded or refuted leaves the frontier; pruning
     # outcomes are terminal, stale is the sink.
     ("ResearchState", "status"): {

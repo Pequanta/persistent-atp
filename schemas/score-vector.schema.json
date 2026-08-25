@@ -51,13 +51,13 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "Section 8.2 global scheduling feature: how much closing this move advances the target theorem."
+      "description": "Global scheduling feature: how much closing this move advances the target theorem."
     },
     "novelty_and_mechanism_diversity": {
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "Section 8.2: how differently this move attacks the goal compared to what was already tried."
+      "description": "How differently this move attacks the goal compared to what was already tried."
     },
     "formalization_readiness": {
       "type": "number",
@@ -67,7 +67,7 @@
     "estimated_cost": {
       "type": "number",
       "minimum": 0,
-      "description": "Section 8.2: relative cost of executing this move (time, budget, attention)."
+      "description": "Relative cost of executing this move (time, budget, attention)."
     },
     "human_priority": {
       "type": "number",

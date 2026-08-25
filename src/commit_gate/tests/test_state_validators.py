@@ -93,7 +93,7 @@ class TestStateValidators(unittest.TestCase):
 
 
 class TestCriticGating(unittest.TestCase):
-    """10.6: provisional -> critic-accepted needs a favorable critic verdict."""
+    """provisional -> critic-accepted needs a favorable critic verdict."""
 
     def setUp(self):
         self.view = MemoryView()

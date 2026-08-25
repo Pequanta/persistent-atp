@@ -1,4 +1,4 @@
-"""Adaptive routing triggers (Section 8.7 / Section 5 of the scheduler spec).
+"""Adaptive routing triggers.
 
 An ordered rule table evaluated over committed formal-run data after each
 cycle -- never invented by the scheduler: failure-family signatures,
@@ -67,7 +67,7 @@ def evaluate_run(
     searching = disposition == RunDisposition.SEARCHING.value
     frontier_by_epoch = _checkpoint_frontiers(view, run_id)
 
-    # 8.7 row 1: closing states at a healthy rate -> keep going.
+    # Row 1: closing states at a healthy rate -> keep going.
     if searching and _closing_healthily(frontier_by_epoch, cfg.healthy_frontier_shrink):
         return RoutingDecision(
             run_id=run_id,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://persistent-atp.invalid/schemas/lease.schema.json",
   "title": "Lease",
-  "description": "One scheduler dispatch (Sections 2, 8.4). A lease binds a worker class to one selected move under a fencing token, with a TTL bounding how long a vanished worker can hold the move. The score_snapshot records why this selection was made -- advisory priority only, never a truth value or status change.",
+  "description": "One scheduler dispatch. A lease binds a worker class to one selected move under a fencing token, with a TTL bounding how long a vanished worker can hold the move. The score_snapshot records why this selection was made -- advisory priority only, never a truth value or status change.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -46,7 +46,7 @@
     },
     "route_id": {
       "type": ["string", "null"],
-      "description": "Reserved for route-level scheduling (5.11); null until Route objects exist."
+      "description": "Reserved for route-level scheduling; null until Route objects exist."
     },
     "ttl_seconds": { "type": "number", "exclusiveMinimum": 0 },
     "issued_at": { "type": "number", "minimum": 0 },
