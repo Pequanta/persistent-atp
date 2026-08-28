@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -175,6 +176,55 @@ class TestConcurrentWriters(unittest.TestCase):
 
         self.assertEqual(caught.exception.reason, Reason.JOURNAL_BUSY)
         self.assertEqual(waiter.head("p1"), (0, GENESIS_HASH))
+
+    def test_file_journal_runs_in_wal_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JournalStore(os.path.join(directory, "journal.db"))
+            mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            synchronous = store._conn.execute("PRAGMA synchronous").fetchone()[0]
+
+        self.assertEqual(mode, "wal")
+        self.assertEqual(synchronous, 2)  # FULL: a committed event is on disk.
+
+    def test_a_reader_does_not_block_a_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "journal.db")
+            writer = JournalStore(path)
+            writer.append(payload())
+
+            reader = JournalStore(path)
+            reader._conn.execute("BEGIN")
+            reader._conn.execute("SELECT * FROM journal").fetchall()
+            try:
+                # Under the default DELETE mode this raises JOURNAL_BUSY once
+                # busy_timeout expires; under WAL it commits.
+                revision, _ = writer.append(payload(base_revision=1))
+            finally:
+                reader._conn.execute("ROLLBACK")
+
+        self.assertEqual(revision, 2)
+
+    def test_a_commit_blocked_by_a_reader_is_a_rejection_not_a_crash(self):
+        # Forced into DELETE mode to reproduce the contention WAL removes.
+        # `BEGIN IMMEDIATE` succeeds there (RESERVED is compatible with the
+        # reader's SHARED lock), so the busy lands on COMMIT instead.
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "journal.db")
+            writer = JournalStore(path, busy_timeout_ms=100)
+            writer._conn.execute("PRAGMA journal_mode=DELETE")
+            writer.append(payload())
+
+            reader = sqlite3.connect(path, isolation_level=None, timeout=0.2)
+            reader.execute("BEGIN")
+            reader.execute("SELECT * FROM journal").fetchall()
+            try:
+                with self.assertRaises(ConcurrencyError) as caught:
+                    writer.append(payload(base_revision=1))
+            finally:
+                reader.execute("ROLLBACK")
+                reader.close()
+
+        self.assertEqual(caught.exception.reason, Reason.JOURNAL_BUSY)
 
 
 if __name__ == "__main__":

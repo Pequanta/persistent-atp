@@ -1,6 +1,6 @@
 import unittest
 
-from commit_gate.ops import AddEdge, SetField, UpsertNode
+from commit_gate.ops import AddEdge, RemoveEdge, SetField, UpsertNode
 from commit_gate.proposal import Proposal
 from commit_gate.reasons import Reason
 from commit_gate.state import MemoryView
@@ -90,6 +90,39 @@ class TestStateValidators(unittest.TestCase):
             AddEdge("RAISED_OBSTRUCTION", "p1/run1", "p1/obs1", "p1/e1")
         )
         self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_unknown(self):
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e-nope"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_committed(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e1"))
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_rel_type_mismatch(self):
+        # MORK removes by exact bytes, so a wrong rel would match nothing and
+        # still report OK, leaving the edge live while the journal says gone.
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("CITES", "p1/e1"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_added_in_the_same_proposal(self):
+        self.view.add_node("p1/fs1", "FormalState", {})
+        self.view.add_node("p1/ta1", "TacticApplication", {})
+        proposal = propose(
+            AddEdge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_twice_in_one_proposal(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
 
 if __name__ == "__main__":
     unittest.main()
