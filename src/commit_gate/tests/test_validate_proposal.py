@@ -236,7 +236,10 @@ class AnnotationSeparation(unittest.TestCase):
         self.assertIn(Reason.MISSING_PRIOR_VALUE, reasons_of(proposal))
 
     def test_expected_null_prior_is_distinct_from_no_expectation(self):
-        proposal = propose(SetField("Alignment", "p17/al1", "verdict", "aligned", prior=None))
+        proposal = replace(
+            propose(SetField("Alignment", "p17/al1", "verdict", "aligned", prior=None)),
+            worker_class=WorkerClass.ALIGNMENT_REVIEWER,
+        )
         self.assertEqual(validate_proposal(proposal), [])
 
 

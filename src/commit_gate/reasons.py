@@ -52,6 +52,8 @@ class Reason(StrEnum):
     PROMOTION_WITHOUT_REPLAY = "promotion-without-replay"
     PROMOTION_WITHOUT_ALIGNMENT = "promotion-without-alignment"
     ENVIRONMENT_DRIFT = "environment-drift"
+    CRITIC_VERDICT_REQUIRED = "critic-verdict-required"
+    WORKER_CLASS_OUT_OF_AUTHORITY = "worker-class-out-of-authority"
 
     # Lost races. The proposal was well formed; the journal moved under it.
     STALE_BASE_REVISION = "stale-base-revision"
