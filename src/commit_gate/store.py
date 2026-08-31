@@ -99,6 +99,9 @@ class JournalStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._clock = clock
+        # WAL lets a projector read the journal while a worker writes it. 
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -191,10 +194,16 @@ class JournalStore:
             ) from exc
         try:
             yield self._conn
-            self._conn.execute("COMMIT")
         except BaseException:
             self._conn.execute("ROLLBACK")
             raise
+        try:
+            self._conn.execute("COMMIT")
+        except sqlite3.OperationalError as exc:
+            self._conn.execute("ROLLBACK")
+            raise ConcurrencyError(
+                Reason.JOURNAL_BUSY, f"could not commit the journal write: {exc}"
+            ) from exc
 
     def _head_row(self, proof_id: str) -> sqlite3.Row | None:
         """This proof's latest journal row, or None if it has no events."""

@@ -530,14 +530,23 @@ def _is_annotation(name: str) -> bool:
 
 
 def check_references(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
-    """Node targets must exist, and edge endpoints must match type definitions."""
+    """Node targets must exist, edge endpoints must match type definitions, and
+    a removal must name an edge that is really there under that rel type."""
     created_nodes = {op.node_id: op.label for op in proposal.ops if isinstance(op, UpsertNode)}
-    
+    added_edges = {op.edge_id: op.rel_type for op in proposal.ops if isinstance(op, AddEdge)}
+    removed_edges: set[str] = set()
+
     def get_label(node_id: str) -> str | None:
         if node_id in created_nodes:
             return created_nodes[node_id]
         record = view.node(node_id)
         return record.label if record else None
+
+    def get_rel(edge_id: str) -> str | None:
+        if edge_id in added_edges:
+            return added_edges[edge_id]
+        record = view.edge(edge_id)
+        return record.rel_type if record else None
 
     for index, op in enumerate(proposal.ops):
         if isinstance(op, SetField):
@@ -577,6 +586,37 @@ def check_references(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
                         f"{op.rel_type} target {op.dst_id!r} is {dst_label}, expected {exp_dst}",
                         index,
                     )
+        elif isinstance(op, RemoveEdge):
+            # MemoryView drops an unknown removal silently and MORK reports OK
+            # whether or not its exact-byte match found anything, so neither
+            # backend can raise this later. It has to be caught here or not at
+            # all — and an uncaught one leaves the edge live in MORK while the
+            # journal says it is gone.
+            if op.edge_id in removed_edges:
+                yield Rejection(
+                    Reason.UNKNOWN_EDGE,
+                    f"edge {op.edge_id!r} is already removed earlier in this proposal",
+                    index,
+                )
+                continue
+            removed_edges.add(op.edge_id)
+
+            actual_rel = get_rel(op.edge_id)
+            if actual_rel is None:
+                yield Rejection(
+                    Reason.UNKNOWN_EDGE,
+                    f"RemoveEdge targets unknown edge {op.edge_id!r}",
+                    index,
+                )
+            elif actual_rel != op.rel_type:
+                # The removal would be projected as `(... op.rel_type ...)`,
+                # which matches no atom, so the real edge would survive.
+                yield Rejection(
+                    Reason.UNKNOWN_EDGE,
+                    f"RemoveEdge names rel {op.rel_type!r} but edge "
+                    f"{op.edge_id!r} is {actual_rel!r}",
+                    index,
+                )
 
 
 def check_prior_values(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
