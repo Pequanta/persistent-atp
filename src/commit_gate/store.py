@@ -99,10 +99,35 @@ class JournalStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._clock = clock
-        # WAL lets a projector read the journal while a worker writes it. 
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # Must precede any locking pragma below: `busy_timeout` itself takes
+        # no lock, and the conversion to WAL does not honor the connect-time
+        # timeout, so it needs the retry loop itself.
+        self._conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        # WAL lets a projector read the journal while a worker writes it.
+        # Only the first connection converts the database (WAL is
+        # persistent); that conversion needs a brief exclusive lock and, unlike
+        # ordinary statements, fails immediately under contention rather than
+        # waiting on the busy handler -- so a fresh opener retries a few times
+        # instead of surfacing `database is locked`.
+        self._set_wal_mode()
         self._conn.execute("PRAGMA synchronous=FULL")
         self._init_schema()
+
+    def _set_wal_mode(self) -> None:
+        """Convert the database to WAL, tolerating racing openers.
+
+        A clean non-WAL answer is permanent -- an in-memory database reports
+        'memory' -- so only a lock failure retries, a few times before
+        giving up and surfacing the error.
+        """
+        for attempt in range(5):
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
+                return
+            except sqlite3.OperationalError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
 
     def _init_schema(self) -> None:
         self._conn.execute(

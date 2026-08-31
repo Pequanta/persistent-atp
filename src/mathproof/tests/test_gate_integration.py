@@ -97,7 +97,7 @@ class TestAdapterThroughTheGate(unittest.TestCase):
         self.assertFalse(result.accepted)
         trail = self.store.read_rejections("p1")
         self.assertEqual(len(trail), 1)
-        self.assertEqual(trail[0]["actor"], "atp-worker")
+        self.assertEqual(trail[0]["payload"]["actor"], "atp-worker")
         self.assertEqual(len(self.store.read_events("p1")), 1)
 
     def test_pln_only_search_downgrades_and_never_mints_a_certificate(self):

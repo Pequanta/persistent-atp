@@ -56,6 +56,15 @@ class Harness(unittest.TestCase):
 
 
 class TestCriticCycle(Harness):
+    def setUp(self):
+        super().setUp()
+        self.view.add_node(
+            "p1/al-1",
+            "Alignment",
+            {"lifecycle": "reviewed", "verdict": "aligned"},
+        )
+        self.view.add_edge("ALIGNS_CLAIM", "p1/al-1", "p1/c-1", "p1/al-1-aligns")
+
     def test_a_critic_lease_promotes_the_claim_through_the_gate(self):
         def critic_handler(lease, context):
             self.assertEqual(context["role"], "critic")

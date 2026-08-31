@@ -170,8 +170,8 @@ class TestRejectionJournal(unittest.TestCase):
 
         trail = self.store.read_rejections("p1")
         self.assertEqual(len(trail), 1)
-        self.assertEqual(trail[0]["actor"], "test")
-        self.assertIn("missing-required-field", trail[0]["reasons"])
+        self.assertEqual(trail[0]["payload"]["actor"], "test")
+        self.assertEqual(trail[0]["reason"], "missing-required-field")
 
         stale = Proposal(
             proof_id="p1",

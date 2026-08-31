@@ -91,6 +91,39 @@ class TestStateValidators(unittest.TestCase):
         )
         self.assertEqual(self.validate(proposal), [])
 
+    def test_remove_edge_unknown(self):
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e-nope"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_committed(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e1"))
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_rel_type_mismatch(self):
+        # MORK removes by exact bytes, so a wrong rel would match nothing and
+        # still report OK, leaving the edge live while the journal says gone.
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("CITES", "p1/e1"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_added_in_the_same_proposal(self):
+        self.view.add_node("p1/fs1", "FormalState", {})
+        self.view.add_node("p1/ta1", "TacticApplication", {})
+        proposal = propose(
+            AddEdge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_twice_in_one_proposal(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
 
 class TestCriticGating(unittest.TestCase):
     """provisional -> critic-accepted needs a favorable critic verdict."""
@@ -122,10 +155,21 @@ class TestCriticGating(unittest.TestCase):
             AddEdge("REVIEWS_CLAIM", attempt_id, "p1/c-1", f"{attempt_id}-rev"),
         )
 
+    def aligned(self, alignment_id: str = "p1/al-1") -> None:
+        self.view.add_node(
+            alignment_id,
+            "Alignment",
+            {"lifecycle": "reviewed", "verdict": "aligned"},
+        )
+        self.view.add_edge(
+            "ALIGNS_CLAIM", alignment_id, "p1/c-1", f"{alignment_id}-aligns"
+        )
+
     def test_promotion_without_a_verdict_is_rejected(self):
         self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, self.promote())
 
     def test_promotion_with_attached_favorable_verdict_passes(self):
+        self.aligned()
         self.assertEqual(self.promote(*self.critic_attempt("p1/at-1")), [])
 
     def test_promotion_on_a_committed_verdict_passes(self):
@@ -135,6 +179,7 @@ class TestCriticGating(unittest.TestCase):
             {"worker_class": "critic", "status": "supported"},
         )
         self.view.add_edge("REVIEWS_CLAIM", "p1/at-9", "p1/c-1", "p1/e-rev")
+        self.aligned()
         self.assertEqual(self.promote(), [])
 
     def test_a_pending_critique_is_not_a_verdict(self):
@@ -180,42 +225,6 @@ class TestCriticGating(unittest.TestCase):
         )
         self.view.add_edge("REVIEWS_CLAIM", "p1/at-2", "p1/c-2", "p1/e-rev2")
         self.assertIn(Reason.CRITIC_VERDICT_REQUIRED, self.promote())
-
-    def test_remove_edge_unknown(self):
-        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e-nope"))
-        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
-
-    def test_remove_edge_committed(self):
-        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
-        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e1"))
-        self.assertEqual(self.validate(proposal), [])
-
-    def test_remove_edge_rel_type_mismatch(self):
-        # MORK removes by exact bytes, so a wrong rel would match nothing and
-        # still report OK, leaving the edge live while the journal says gone.
-        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
-        proposal = propose(RemoveEdge("CITES", "p1/e1"))
-        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
-
-    def test_remove_edge_added_in_the_same_proposal(self):
-        self.view.add_node("p1/fs1", "FormalState", {})
-        self.view.add_node("p1/ta1", "TacticApplication", {})
-        proposal = propose(
-            AddEdge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1"),
-            RemoveEdge("HAS_TACTIC", "p1/e1"),
-        )
-        self.assertEqual(self.validate(proposal), [])
-
-    def test_remove_edge_twice_in_one_proposal(self):
-        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
-        proposal = propose(
-            RemoveEdge("HAS_TACTIC", "p1/e1"),
-            RemoveEdge("HAS_TACTIC", "p1/e1"),
-        )
-        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 H1 = "sha256:" + "11" * 32
@@ -290,3 +299,7 @@ class TestEnvironmentBinding(unittest.TestCase):
         )
         found = {f.reason for f in validate_proposal(proposal, self.view)}
         self.assertIn(Reason.ENVIRONMENT_DRIFT, found)
+
+
+if __name__ == "__main__":
+    unittest.main()
