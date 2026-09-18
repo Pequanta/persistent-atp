@@ -65,6 +65,23 @@
         "critic-review",
         "human-guidance"
       ]
+    },
+    "verdict": {
+      "description": "Critic results (12.4): the reviewer's conclusion on the leased claim. Mirrors the favorable/unfavorable Attempt statuses.",
+      "enum": ["supported", "critic-accepted", "refuted", "retracted"]
+    },
+    "counterexample_artifact": {
+      "$ref": "#/$defs/sha256",
+      "description": "Critic results: content address of a counterexample witness, when the verdict refutes."
+    },
+    "parent_state_id": {
+      "type": "string",
+      "pattern": "^[^/]+/rs-[1-9][0-9]*$",
+      "description": "Explorer results (12.4): the research state a proposed move hangs from."
+    },
+    "move_detail": {
+      "type": "string",
+      "description": "Explorer results: what the proposed research move is and why."
     }
   },
   "$defs": {

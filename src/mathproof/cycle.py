@@ -13,10 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from commit_gate.gate import CommitGate, CommitResult
+from commit_gate.proposal import Proposal
 from commit_gate.state import ReadView
 from .context_compiler import compile_context, compile_formal_request
 from .dispatch import Dispatcher, result_to_proposal
 from .ids import IdType
+from .routing import RoutingDecision, evaluate_run
 from .scheduler import GlobalScheduler, Lease
 
 __all__ = ["CycleDigest", "run_cycle", "category_of"]
@@ -33,6 +35,7 @@ class CycleDigest:
     revision: int | None = None
     rejections: tuple = field(default=())
     audit_recommended: bool = False
+    routing: RoutingDecision | None = None
 
     @classmethod
     def empty_frontier(cls) -> "CycleDigest":
@@ -85,6 +88,15 @@ def run_cycle(
         if result.get("terminal", True):
             scheduler.release(proof_id, lease.lease_id)
 
+    routing = _route_after_commit(
+        result,
+        view=view,
+        gate=gate,
+        store=scheduler._store,
+        proof_id=proof_id,
+        maintenance=maintenance,
+    )
+
     return CycleDigest(
         lease_issued=True,
         selected_move_id=lease.selected_move_id,
@@ -92,7 +104,67 @@ def run_cycle(
         accepted=commit.accepted,
         revision=commit.revision,
         rejections=commit.rejections,
+        routing=routing,
     )
+
+
+def _route_after_commit(
+    result: Mapping[str, Any],
+    *,
+    view: ReadView,
+    gate: CommitGate,
+    store,
+    proof_id: str,
+    maintenance: Callable[[Any, CommitResult], None] | None = None,
+) -> RoutingDecision | None:
+    """Evaluate the Section 8.7 trigger table over the run just committed.
+
+    A bridge-lemma convergence fires a follow-up research-move proposal
+    through the gate; every other decision rides the digest back to the
+    coordinator to fold into the next cycle (e.g. widened retrieval).
+    """
+    run_id = result.get("run_id")
+    if not run_id or view.node(run_id) is None:
+        return None
+    decision = evaluate_run(view, run_id)
+    if decision is None or decision.action != "propose-bridge-lemma":
+        return decision
+
+    at_state = decision.params.get("at_state")
+    if at_state is None or view.node(at_state) is None:
+        return decision
+
+    from commit_gate.ops import AddEdge, UpsertNode
+    from .dispatch import _next_serial
+
+    # An obstruction converges into a fresh research state whose first move
+    # is the bridge-lemma request; PROPOSES hangs off ResearchState only.
+    state_id = f"{proof_id}/rs-{_next_serial(view, 'rs')}"
+    move_id = f"{proof_id}/rm-{_next_serial(view, 'rm')}"
+    detail = (
+        f"bridge lemma for {decision.params.get('obstruction_kind')} "
+        f"converging at {at_state}"
+    )
+    ops = (
+        UpsertNode(
+            "ResearchState",
+            state_id,
+            {"status": "open", "origin_state": at_state},
+        ),
+        UpsertNode("ResearchMove", move_id, {"status": "queued", "detail": detail}),
+        AddEdge("PROPOSES", state_id, move_id, f"{move_id}-proposed"),
+    )
+    proposal = Proposal(
+        proof_id=proof_id,
+        actor="scheduler-routing",
+        worker_class="llm-research",
+        ops=ops,
+        base_revision=store.head(proof_id)[0],
+    )
+    follow_up = gate.commit(proposal)
+    if follow_up.accepted and maintenance is not None:
+        maintenance(proposal, follow_up)
+    return decision
 
 
 def _dispatch(
